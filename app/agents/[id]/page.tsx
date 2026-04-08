@@ -2,7 +2,7 @@
 
 import { use, useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import Link from 'next/link'
-import type { UIMessage } from 'ai'
+import type { UIMessage, FileUIPart } from 'ai'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import ReactMarkdown from 'react-markdown'
@@ -194,6 +194,9 @@ function AgentChatUI({
   const prevStatusRef = useRef<string>('ready')
 
   const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<FileUIPart[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
   const [currentLevel, setCurrentLevel] = useState(agent.level)
   const [currentCount, setCurrentCount] = useState(agent.messageCount)
   const [showLevelUp, setShowLevelUp] = useState(false)
@@ -279,14 +282,42 @@ function AgentChatUI({
     setIsAtBottom(true)
   }
 
+  // Convert File → FileUIPart (base64 data URL)
+  const fileToUIPart = useCallback((file: File): Promise<FileUIPart> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve({
+        type: 'file',
+        mediaType: file.type || 'application/octet-stream',
+        filename: file.name,
+        url: reader.result as string,
+      })
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+  }, [])
+
+  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    if (!files.length) return
+    const parts = await Promise.all(files.map(fileToUIPart))
+    setAttachments(prev => [...prev, ...parts])
+    e.target.value = ''
+  }, [fileToUIPart])
+
+  const removeAttachment = useCallback((idx: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== idx))
+  }, [])
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault()
     const text = input.trim()
-    if (!text || isStreaming) return
+    if ((!text && attachments.length === 0) || isStreaming) return
     setInput('')
+    setAttachments([])
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     setIsAtBottom(true)
-    await sendMessage({ text })
+    await sendMessage({ text: text || ' ', files: attachments.length > 0 ? attachments : undefined })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -538,8 +569,27 @@ function AgentChatUI({
                         : undefined
                     }
                   >
-                    {message.role === 'user' ? (
-                      <span>{messageText}</span>
+                    {/* File/image attachments in message */}
+                    {message.parts.filter(p => p.type === 'file').map((part, i) => {
+                      const fp = part as FileUIPart
+                      const isImage = fp.mediaType.startsWith('image/')
+                      return isImage ? (
+                        <img
+                          key={i}
+                          src={fp.url}
+                          alt={fp.filename ?? '첨부 이미지'}
+                          className="max-w-xs max-h-64 rounded-lg mb-2 border border-[#2a2a2a] object-contain"
+                        />
+                      ) : (
+                        <div key={i} className="flex items-center gap-2 bg-[#0d0d0d] border border-[#2a2a2a] rounded-lg px-3 py-2 mb-2 text-xs text-gray-400">
+                          <span className="text-lg">📎</span>
+                          <span className="truncate max-w-[180px]">{fp.filename ?? '첨부파일'}</span>
+                          <span className="text-gray-600 shrink-0">{fp.mediaType.split('/')[1]?.toUpperCase()}</span>
+                        </div>
+                      )
+                    })}
+                  {message.role === 'user' ? (
+                      messageText ? <span>{messageText}</span> : null
                     ) : isStreamingThisMsg ? (
                       <span>
                         <ReactMarkdown
@@ -670,7 +720,51 @@ function AgentChatUI({
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="flex gap-3 items-end">
+          {/* Hidden file inputs */}
+          <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileSelect} />
+          <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md,.csv,.json,.docx,.xlsx" multiple className="hidden" onChange={handleFileSelect} />
+
+          {/* Attachment previews */}
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-3">
+              {attachments.map((att, idx) => {
+                const isImage = att.mediaType.startsWith('image/')
+                return (
+                  <div key={idx} className="relative group flex items-center gap-2 bg-[#1a1a1a] border border-[#333] rounded-lg px-3 py-2 text-xs text-gray-300">
+                    {isImage ? (
+                      <img src={att.url} alt={att.filename} className="w-10 h-10 object-cover rounded" />
+                    ) : (
+                      <span className="text-base">📎</span>
+                    )}
+                    <span className="max-w-[120px] truncate">{att.filename ?? '파일'}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(idx)}
+                      className="ml-1 text-gray-600 hover:text-red-400 transition-colors font-bold"
+                    >×</button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="flex gap-2 items-end">
+            {/* Image attach */}
+            <button
+              type="button"
+              onClick={() => imageInputRef.current?.click()}
+              disabled={isStreaming}
+              className="nb-btn px-3 py-3 rounded-xl text-base flex-shrink-0 bg-[#1a1a1a] text-gray-400 hover:text-white disabled:opacity-40"
+              title="이미지 첨부"
+            >🖼️</button>
+            {/* File attach */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isStreaming}
+              className="nb-btn px-3 py-3 rounded-xl text-base flex-shrink-0 bg-[#1a1a1a] text-gray-400 hover:text-white disabled:opacity-40"
+              title="파일 첨부 (PDF, TXT, CSV...)"
+            >📎</button>
             <textarea
               ref={textareaRef}
               value={input}
@@ -693,14 +787,14 @@ function AgentChatUI({
             />
             <button
               type="submit"
-              disabled={isStreaming || !input.trim()}
+              disabled={isStreaming || (!input.trim() && attachments.length === 0)}
               className="nb-btn nb-btn-gold px-5 py-3 rounded-xl text-sm font-bold flex-shrink-0"
             >
               {isStreaming ? '···' : '전송'}
             </button>
           </form>
           <p className="text-center text-[10px] text-gray-700 mt-2">
-            Enter: 전송 · Shift+Enter: 줄바꿈
+            Enter: 전송 · Shift+Enter: 줄바꿈 · 이미지/파일 첨부 가능
           </p>
         </div>
       </footer>
