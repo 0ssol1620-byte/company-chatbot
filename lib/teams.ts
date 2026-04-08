@@ -1,4 +1,8 @@
-export type Provider = 'openai' | 'anthropic';
+// @deprecated - LEGACY: This file supports the old team-based routing system at /chat/[teamId]
+// New system uses /agents/[id] with user-created agents stored in localStorage
+// TODO: Remove when /chat/[teamId] route is cleaned up
+
+import { Provider } from '@/types'
 
 export interface TeamConfig {
   id: string;

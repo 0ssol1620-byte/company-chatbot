@@ -3,21 +3,13 @@
 import { use, useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Agent, AvatarType, Provider } from '@/types'
-import { getAgent, updateAgent, deleteAgent, LEVEL_NAMES } from '@/lib/agents'
+import { Agent, OfficerType, Provider } from '@/types'
+import { getAgent, updateAgent, deleteAgent, getLevelInfo } from '@/lib/agents'
 import { MODELS } from '@/lib/models'
-import { PixelCharacter } from '@/components/pixel-character'
+import { PixelCharacter, OFFICER_LABELS } from '@/components/pixel-character'
 import { DotBackground } from '@/components/dot-background'
 
-const AVATAR_TYPES: AvatarType[] = ['warrior', 'mage', 'archer', 'healer', 'rogue', 'bard']
-const AVATAR_LABELS: Record<AvatarType, string> = {
-  warrior: '전사',
-  mage: '마법사',
-  archer: '궁수',
-  healer: '힐러',
-  rogue: '도적',
-  bard: '음유시인',
-}
+const AVATAR_TYPES: OfficerType[] = ['developer', 'marketer', 'analyst', 'planner', 'hr', 'sales']
 const PRESET_COLORS = ['#ff4757', '#2ed573', '#1e90ff', '#ffd700', '#a855f7', '#ff6b6b', '#00cec9', '#fd9644']
 const PROVIDER_LABELS: Record<Provider, string> = {
   openai: 'OpenAI',
@@ -40,16 +32,18 @@ export default function AgentSettingsPage({ params }: PageProps) {
   const [name, setName] = useState('')
   const [role, setRole] = useState('')
   const [description, setDescription] = useState('')
-  const [avatar, setAvatar] = useState<AvatarType>('warrior')
+  const [avatar, setAvatar] = useState<OfficerType>('developer')
   const [color, setColor] = useState('#1e90ff')
   const [provider, setProvider] = useState<Provider>('openai')
   const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [systemPrompt, setSystemPrompt] = useState('')
+  const [agentFiles, setAgentFiles] = useState(agent?.files ?? [])
 
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   useEffect(() => {
     const a = getAgent(id)
@@ -64,6 +58,7 @@ export default function AgentSettingsPage({ params }: PageProps) {
       setModel(a.model)
       setApiKey(a.apiKey)
       setSystemPrompt(a.systemPrompt)
+      setAgentFiles(a.files)
     }
     setLoaded(true)
   }, [id])
@@ -81,26 +76,29 @@ export default function AgentSettingsPage({ params }: PageProps) {
       model,
       apiKey,
       systemPrompt,
+      files: agentFiles,
     })
     setSaving(false)
     setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    setTimeout(() => setSaved(false), 3000)
   }
 
   const handleDelete = () => {
     if (!agent) return
-    if (confirm(`"${agent.name}" 에이전트를 삭제할까요?\n대화 기록도 함께 삭제됩니다.`)) {
-      localStorage.removeItem(`agent-${id}-chat`)
-      deleteAgent(id)
-      router.push('/')
-    }
+    try { localStorage.removeItem(`agent-${id}-chat`) } catch { /* ignore */ }
+    deleteAgent(id)
+    router.push('/')
   }
 
   const handleClearChat = () => {
     if (confirm('이 에이전트와의 대화 기록을 모두 삭제할까요?')) {
-      localStorage.removeItem(`agent-${id}-chat`)
+      try { localStorage.removeItem(`agent-${id}-chat`) } catch { /* ignore */ }
       alert('대화 기록이 삭제되었습니다.')
     }
+  }
+
+  const handleRemoveFile = (fileId: string) => {
+    setAgentFiles(prev => prev.filter(f => f.id !== fileId))
   }
 
   if (!loaded) {
@@ -131,6 +129,7 @@ export default function AgentSettingsPage({ params }: PageProps) {
     )
   }
 
+  const levelInfo = getLevelInfo(agent.messageCount)
   const currentModel = MODELS[provider]?.find((m) => m.id === model)
 
   return (
@@ -185,7 +184,7 @@ export default function AgentSettingsPage({ params }: PageProps) {
               <span className="text-[10px] px-2 py-0.5 rounded bg-[#1a1a1a] border border-[#333] text-gray-400">
                 {currentModel?.name ?? model}
               </span>
-              <span className="text-[10px] text-gray-600">{LEVEL_NAMES[agent.level]}</span>
+              <span className="text-[10px] text-gray-600">{levelInfo.title}</span>
             </div>
           </div>
         </div>
@@ -251,7 +250,7 @@ export default function AgentSettingsPage({ params }: PageProps) {
                   }`}
                 >
                   <PixelCharacter type={t} size={36} animated={avatar === t} />
-                  <span className="text-[8px] text-gray-500">{AVATAR_LABELS[t]}</span>
+                  <span className="text-[8px] text-gray-500">{OFFICER_LABELS[t]}</span>
                 </button>
               ))}
             </div>
@@ -332,6 +331,9 @@ export default function AgentSettingsPage({ params }: PageProps) {
                   {showApiKey ? '숨기기' : '보기'}
                 </button>
               </div>
+              <p className="text-[10px] text-yellow-600 mt-2">
+                ⚠ API 키는 브라우저의 localStorage에 저장됩니다. 공용 기기에서는 사용 후 반드시 삭제해 주세요.
+              </p>
             </div>
           </section>
 
@@ -353,6 +355,35 @@ export default function AgentSettingsPage({ params }: PageProps) {
             <p className="text-xs text-gray-700 mt-1 text-right">{systemPrompt.length}자</p>
           </section>
 
+          {/* ── Files management ── */}
+          {agentFiles.length > 0 && (
+            <section className="nb-card bg-[#141414] rounded-xl p-6 space-y-3">
+              <h2
+                className="text-white font-bold mb-1"
+                style={{ fontFamily: "'Press Start 2P', monospace", fontSize: '9px', letterSpacing: '1px' }}
+              >
+                참고 파일
+              </h2>
+              {agentFiles.map((f) => (
+                <div
+                  key={f.id}
+                  className="flex items-center justify-between bg-[#0a0a0a] border border-[#333] rounded-lg px-3 py-2"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-white truncate">{f.name}</p>
+                    <p className="text-[10px] text-gray-500">{f.contentType}</p>
+                  </div>
+                  <button
+                    onClick={() => handleRemoveFile(f.id)}
+                    className="text-red-400 hover:text-red-300 text-xs ml-2"
+                  >
+                    ✕ 제거
+                  </button>
+                </div>
+              ))}
+            </section>
+          )}
+
           {/* ── Actions ── */}
           <div className="flex gap-3">
             <button
@@ -370,7 +401,7 @@ export default function AgentSettingsPage({ params }: PageProps) {
               🗑 대화
             </button>
             <button
-              onClick={handleDelete}
+              onClick={() => setShowDeleteConfirm(true)}
               className="nb-btn nb-btn-danger px-5 py-3 rounded-xl text-sm font-bold"
             >
               삭제
@@ -378,6 +409,34 @@ export default function AgentSettingsPage({ params }: PageProps) {
           </div>
         </div>
       </div>
+
+      {/* Custom delete confirmation dialog */}
+      {showDeleteConfirm && (
+        <div className="confirm-dialog-overlay" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="confirm-dialog max-w-sm w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <p className="text-white font-bold text-sm mb-2">에이전트 삭제</p>
+            <p className="text-gray-400 text-xs mb-4">
+              정말 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.
+              <br />
+              &quot;{agent.name}&quot; 에이전트와 대화 기록이 모두 삭제됩니다.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="nb-btn px-4 py-2 rounded text-xs bg-[#1a1a1a] text-white"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleDelete}
+                className="nb-btn nb-btn-danger px-4 py-2 rounded text-xs font-bold"
+              >
+                삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </DotBackground>
   )
 }

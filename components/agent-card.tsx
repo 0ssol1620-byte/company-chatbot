@@ -2,63 +2,71 @@
 
 import Link from 'next/link'
 import { Agent } from '@/types'
-import { PixelCharacter } from './pixel-character'
-import { LEVEL_NAMES } from '@/lib/agents'
+import { getLevelInfo } from '@/lib/agents'
+import { PixelCharacter, OFFICER_LABELS } from '@/components/pixel-character'
 
-interface AgentCardProps {
-  agent: Agent
-}
-
-export function AgentCard({ agent }: AgentCardProps) {
+export function AgentCard({ agent }: { agent: Agent }) {
+  const { level, title, progress } = getLevelInfo(agent.messageCount)
   const modelLabel = agent.model.split('/').pop() ?? agent.model
 
   return (
-    <Link href={`/agents/${agent.id}`} className="block">
-      <div className="nb-card bg-[#141414] rounded-lg p-5 flex flex-col items-center gap-3 h-full">
-        <div className="relative">
-          <PixelCharacter type={agent.avatar} size={80} animated />
-          <div
-            className="absolute -top-1 -right-1 level-badge px-1.5 py-0.5 rounded text-[8px]"
-            style={{ backgroundColor: agent.color, color: '#0a0a0a' }}
-          >
-            LV.{agent.level}
-          </div>
-        </div>
-
-        <div className="text-center w-full">
-          <h3
-            className="text-sm font-bold truncate"
-            style={{ fontFamily: "'Press Start 2P', monospace", fontSize: '10px', lineHeight: '1.6' }}
-          >
-            {agent.name}
-          </h3>
-          <p className="text-xs text-gray-400 mt-1 truncate">{agent.role}</p>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap justify-center">
-          <span className="text-[10px] px-2 py-0.5 rounded bg-[#1a1a1a] border border-[#333] text-gray-300">
-            {modelLabel}
+    <div className="nb-card bg-[#111] rounded-lg p-4 flex flex-col gap-3 group"
+      style={{ borderColor: agent.color, boxShadow: `4px 4px 0 ${agent.color}40` }}>
+      {/* Character */}
+      <div className="flex items-start justify-between">
+        <PixelCharacter type={agent.avatar} size={72} animated />
+        <div className="flex flex-col items-end gap-1">
+          <span className="level-badge px-2 py-1 rounded text-[9px]"
+            style={{ background: agent.color + '22', color: agent.color, border: `1px solid ${agent.color}` }}>
+            LV.{level}
           </span>
-          <span className="text-[10px] px-2 py-0.5 rounded bg-[#1a1a1a] border border-[#333] text-gray-400">
-            {LEVEL_NAMES[agent.level]}
+          <span className="text-[9px] text-gray-500" style={{ fontFamily: "'Press Start 2P', monospace" }}>
+            {title}
           </span>
-        </div>
-
-        <p className="text-[10px] text-gray-500">{agent.messageCount} messages</p>
-
-        <div className="flex gap-2 mt-auto w-full">
-          <button className="nb-btn nb-btn-gold flex-1 px-3 py-2 rounded text-xs font-bold">
-            대화하기
-          </button>
-          <Link
-            href={`/agents/${agent.id}/settings`}
-            onClick={(e) => e.stopPropagation()}
-            className="nb-btn px-3 py-2 rounded text-xs bg-[#1a1a1a] text-white"
-          >
-            &#9881;
-          </Link>
         </div>
       </div>
-    </Link>
+
+      {/* Info */}
+      <div>
+        <h3 className="font-bold text-white text-sm truncate"
+          style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 10 }}>
+          {agent.name}
+        </h3>
+        <p className="text-gray-400 text-xs mt-1 truncate">{agent.role}</p>
+        <p className="text-gray-600 text-xs mt-0.5">{OFFICER_LABELS[agent.avatar]}</p>
+      </div>
+
+      {/* EXP Bar */}
+      <div className="space-y-1">
+        <div className="h-1.5 bg-[#1a1a1a] rounded-full overflow-hidden border border-[#2a2a2a]">
+          <div
+            className="h-full rounded-full transition-all duration-700"
+            style={{ width: `${progress}%`, backgroundColor: agent.color }}
+          />
+        </div>
+        <span className="text-[9px] text-gray-700">{agent.messageCount}개 대화</span>
+      </div>
+
+      {/* Model badge */}
+      <div className="text-[9px] px-2 py-1 rounded text-center"
+        style={{ background: '#1a1a1a', border: '1px solid #333', color: '#888' }}>
+        {modelLabel}
+      </div>
+
+      {/* Actions - separate links not nested */}
+      <div className="flex gap-2 mt-auto">
+        <Link href={`/agents/${agent.id}`}
+          className="flex-1 text-center text-xs py-2 rounded font-bold nb-btn"
+          style={{ background: agent.color, color: '#0a0a0a', borderColor: agent.color }}>
+          대화하기
+        </Link>
+        <Link href={`/agents/${agent.id}/settings`}
+          className="px-3 py-2 rounded nb-btn text-gray-400 hover:text-white text-xs"
+          style={{ background: '#1a1a1a' }}
+          onClick={(e) => e.stopPropagation()}>
+          ⚙
+        </Link>
+      </div>
+    </div>
   )
 }

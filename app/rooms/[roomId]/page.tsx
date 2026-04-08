@@ -39,6 +39,20 @@ export default function RoomChatPage({ params }: PageProps) {
   const [streamingContent, setStreamingContent] = useState('')
   const [isInvoking, setIsInvoking] = useState(false)
 
+  // @mention state
+  const [mentionQuery, setMentionQuery] = useState('')
+  const [mentionOpen, setMentionOpen] = useState(false)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [mentionMatches, setMentionMatches] = useState<Agent[]>([])
+  const [mentionedAgent, setMentionedAgent] = useState<Agent | null>(null)
+
+  // Emoji reaction state
+  const [reactions, setReactions] = useState<Record<string, Record<string, number>>>({})
+  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null)
+
+  // Reply/quote state
+  const [replyingTo, setReplyingTo] = useState<RoomMessage | null>(null)
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const channelRef = useRef<BroadcastChannel | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -79,6 +93,60 @@ export default function RoomChatPage({ params }: PageProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingContent])
 
+  // Close reaction picker on outside click
+  useEffect(() => {
+    if (!reactionPickerFor) return
+    const handler = () => setReactionPickerFor(null)
+    document.addEventListener('click', handler)
+    return () => document.removeEventListener('click', handler)
+  }, [reactionPickerFor])
+
+  const invitedAgents = agents.filter((a) => room?.invitedAgentIds.includes(a.id))
+
+  // ── @mention handlers ────────────────────────────────────────────────────────
+  const handleInputChange = (value: string) => {
+    setInput(value)
+    const atIdx = value.lastIndexOf('@')
+    if (atIdx >= 0) {
+      const query = value.slice(atIdx + 1).toLowerCase()
+      const matches = invitedAgents.filter(
+        (a) =>
+          a.name.toLowerCase().includes(query) || a.role.toLowerCase().includes(query)
+      )
+      if (matches.length > 0) {
+        setMentionMatches(matches)
+        setMentionOpen(true)
+        setMentionQuery(query)
+        setMentionIndex(0)
+      } else {
+        setMentionOpen(false)
+      }
+    } else {
+      setMentionOpen(false)
+      setMentionedAgent(null)
+    }
+  }
+
+  const selectMention = (agent: Agent) => {
+    const atIdx = input.lastIndexOf('@')
+    setInput(input.slice(0, atIdx) + `@${agent.name} `)
+    setMentionOpen(false)
+    setMentionedAgent(agent)
+    textareaRef.current?.focus()
+  }
+
+  // ── Emoji reaction handlers ──────────────────────────────────────────────────
+  const addReaction = (msgId: string, emoji: string) => {
+    setReactions((prev) => ({
+      ...prev,
+      [msgId]: {
+        ...(prev[msgId] || {}),
+        [emoji]: ((prev[msgId]?.[emoji] || 0) + 1),
+      },
+    }))
+    setReactionPickerFor(null)
+  }
+
   // ── Send user message ────────────────────────────────────────────────────────
   const sendMessage = useCallback(
     (content: string) => {
@@ -100,14 +168,54 @@ export default function RoomChatPage({ params }: PageProps) {
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault()
-    const text = input.trim()
+    let text = input.trim()
     if (!text || isInvoking) return
+
+    // Prepend reply quote if replying
+    if (replyingTo) {
+      const quoteName = replyingTo.userName || replyingTo.agentName || '?'
+      const excerpt = replyingTo.content.slice(0, 50)
+      text = `> ${quoteName}: ${excerpt}\n\n${text}`
+      setReplyingTo(null)
+    }
+
     setInput('')
+    setMentionOpen(false)
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     sendMessage(text)
+
+    // Auto-invoke mentioned agent
+    if (mentionedAgent) {
+      const agent = mentionedAgent
+      setMentionedAgent(null)
+      setTimeout(() => invokeAgent(agent), 100)
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionIndex((i) => Math.min(i + 1, mentionMatches.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionIndex((i) => Math.max(i - 1, 0))
+        return
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        if (mentionMatches[mentionIndex]) {
+          selectMention(mentionMatches[mentionIndex])
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        setMentionOpen(false)
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSubmit()
@@ -222,8 +330,6 @@ export default function RoomChatPage({ params }: PageProps) {
     updateRoomAgents(roomId, next)
     setRoom((prev) => (prev ? { ...prev, invitedAgentIds: next } : prev))
   }
-
-  const invitedAgents = agents.filter((a) => room?.invitedAgentIds.includes(a.id))
 
   if (!loaded) {
     return (
@@ -370,7 +476,18 @@ export default function RoomChatPage({ params }: PageProps) {
           )}
 
           {messages.map((msg) => (
-            <MsgBubble key={msg.id} msg={msg} me={user} />
+            <MsgBubble
+              key={msg.id}
+              msg={msg}
+              me={user}
+              reactions={reactions}
+              reactionPickerFor={reactionPickerFor}
+              onAddReaction={addReaction}
+              onOpenReactionPicker={(id) => {
+                setReactionPickerFor((prev) => (prev === id ? null : id))
+              }}
+              onReply={setReplyingTo}
+            />
           ))}
 
           {/* Streaming agent response */}
@@ -509,43 +626,103 @@ export default function RoomChatPage({ params }: PageProps) {
         </div>
       )}
 
-      {/* ── Input ── */}
+      {/* ── Input area ── */}
       <footer
-        className="border-t border-[#1a1a1a] p-4 flex-shrink-0"
+        className="border-t border-[#1a1a1a] flex-shrink-0 relative"
         style={{ background: '#0d0d0d' }}
       >
-        <form onSubmit={handleSubmit} className="flex gap-2 items-end">
-          <div className="flex-shrink-0 text-xl pb-2.5" title={user.name || '나'}>
-            {user.emoji}
+        {/* @mention dropdown (above the footer input) */}
+        {mentionOpen && mentionMatches.length > 0 && (
+          <div className="absolute bottom-full left-0 right-0 mx-4 mb-1 bg-[#0d0d0d] border border-[#2a2a2a] rounded-xl overflow-hidden z-20 shadow-lg">
+            <div className="px-3 py-1.5 border-b border-[#1a1a1a]">
+              <span className="text-[9px] text-gray-600">에이전트 멘션</span>
+            </div>
+            {mentionMatches.map((agent, idx) => (
+              <button
+                key={agent.id}
+                onClick={() => selectMention(agent)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
+                  idx === mentionIndex
+                    ? 'bg-[#1a1a1a] border-l-2 border-[#ffd700]'
+                    : 'hover:bg-[#141414]'
+                }`}
+              >
+                <PixelCharacter type={agent.avatar} size={24} />
+                <div>
+                  <p className="text-white text-xs font-medium">{agent.name}</p>
+                  <p className="text-gray-500 text-[9px]">{agent.role}</p>
+                </div>
+              </button>
+            ))}
           </div>
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onInput={(e) => {
-              const el = e.currentTarget
-              el.style.height = 'auto'
-              el.style.height = `${Math.min(el.scrollHeight, 120)}px`
-            }}
-            placeholder={isInvoking ? '에이전트 응답 중...' : '메시지 입력... (Enter: 전송)'}
-            rows={1}
-            disabled={isInvoking}
-            className="flex-1 resize-none rounded-xl px-4 py-3 text-sm max-h-32 overflow-y-auto"
-            style={{
-              background: '#1a1a1a',
-              border: '2px solid #2a2a2a',
-              color: '#ededed',
-            }}
-          />
-          <button
-            type="submit"
-            disabled={isInvoking || !input.trim()}
-            className="nb-btn nb-btn-gold px-5 py-3 rounded-xl text-sm font-bold flex-shrink-0"
-          >
-            {isInvoking ? '···' : '전송'}
-          </button>
-        </form>
+        )}
+
+        {/* Reply preview bar */}
+        {replyingTo && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-[#0d0d0d] border-t border-[#1a1a1a] text-xs">
+            <span className="text-gray-500">↩</span>
+            <span className="text-gray-400 truncate flex-1">
+              <span className="text-gray-300">
+                {replyingTo.userName || replyingTo.agentName}:{' '}
+              </span>
+              {replyingTo.content.slice(0, 50)}
+            </span>
+            <button
+              onClick={() => setReplyingTo(null)}
+              className="text-gray-600 hover:text-gray-300 text-base leading-none"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        {/* Mentioned agent indicator */}
+        {mentionedAgent && (
+          <div className="flex items-center gap-2 px-3 py-1.5 border-t border-[#1a1a1a] text-[10px] text-gray-500">
+            <span>@{mentionedAgent.name} 자동 호출 예정</span>
+            <button
+              onClick={() => setMentionedAgent(null)}
+              className="text-gray-700 hover:text-gray-400 ml-auto"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        <div className="p-4">
+          <form onSubmit={handleSubmit} className="flex gap-2 items-end">
+            <div className="flex-shrink-0 text-xl pb-2.5" title={user.name || '나'}>
+              {user.emoji}
+            </div>
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => handleInputChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onInput={(e) => {
+                const el = e.currentTarget
+                el.style.height = 'auto'
+                el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+              }}
+              placeholder={isInvoking ? '에이전트 응답 중...' : '메시지 입력... (Enter: 전송, @: 에이전트 멘션)'}
+              rows={1}
+              disabled={isInvoking}
+              className="flex-1 resize-none rounded-xl px-4 py-3 text-sm max-h-32 overflow-y-auto"
+              style={{
+                background: '#1a1a1a',
+                border: '2px solid #2a2a2a',
+                color: '#ededed',
+              }}
+            />
+            <button
+              type="submit"
+              disabled={isInvoking || !input.trim()}
+              className="nb-btn nb-btn-gold px-5 py-3 rounded-xl text-sm font-bold flex-shrink-0"
+            >
+              {isInvoking ? '···' : '전송'}
+            </button>
+          </form>
+        </div>
       </footer>
     </div>
   )
@@ -553,13 +730,27 @@ export default function RoomChatPage({ params }: PageProps) {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
+const EMOJI_LIST = ['👍', '❤️', '😂', '🔥', '👏', '💡']
+
 function MsgBubble({
   msg,
   me,
+  reactions,
+  reactionPickerFor,
+  onAddReaction,
+  onOpenReactionPicker,
+  onReply,
 }: {
   msg: RoomMessage
   me: { name: string; emoji: string }
+  reactions: Record<string, Record<string, number>>
+  reactionPickerFor: string | null
+  onAddReaction: (msgId: string, emoji: string) => void
+  onOpenReactionPicker: (msgId: string) => void
+  onReply: (msg: RoomMessage) => void
 }) {
+  const [hovered, setHovered] = useState(false)
+
   const ts = new Date(msg.timestamp).toLocaleTimeString('ko-KR', {
     hour: '2-digit',
     minute: '2-digit',
@@ -575,9 +766,16 @@ function MsgBubble({
     )
   }
 
+  const msgReactions = reactions[msg.id] || {}
+  const hasReactions = Object.keys(msgReactions).length > 0
+
   if (msg.type === 'agent') {
     return (
-      <div className="flex gap-3 justify-start msg-agent">
+      <div
+        className="flex gap-3 justify-start msg-agent"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
         <div className="flex-shrink-0 mt-1">
           {msg.agentAvatar ? (
             <PixelCharacter type={msg.agentAvatar as AvatarType} size={34} />
@@ -602,12 +800,63 @@ function MsgBubble({
               <span className="text-[9px] text-gray-600">{msg.agentRole}</span>
             )}
           </div>
-          <div
-            className="rounded-xl rounded-tl-none px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words bg-[#141414] border-2 text-gray-100"
-            style={{ borderColor: `${msg.agentColor || '#ffd700'}33` }}
-          >
-            {msg.content}
+          <div className="relative">
+            <div
+              className="rounded-xl rounded-tl-none px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words bg-[#141414] border-2 text-gray-100"
+              style={{ borderColor: `${msg.agentColor || '#ffd700'}33` }}
+            >
+              {msg.content}
+            </div>
+            {/* Hover action buttons */}
+            {hovered && (
+              <div className="absolute -top-7 left-0 flex items-center gap-1">
+                <button
+                  onClick={(e) => { e.stopPropagation(); onOpenReactionPicker(msg.id) }}
+                  className="text-[10px] text-gray-500 hover:text-gray-200 bg-[#1a1a1a] border border-[#2a2a2a] rounded px-1.5 py-0.5 transition-colors"
+                >
+                  + 반응
+                </button>
+                <button
+                  onClick={() => onReply(msg)}
+                  className="text-[10px] text-gray-500 hover:text-gray-200 bg-[#1a1a1a] border border-[#2a2a2a] rounded px-1.5 py-0.5 transition-colors"
+                >
+                  ↩ 답장
+                </button>
+              </div>
+            )}
+            {/* Reaction picker */}
+            {reactionPickerFor === msg.id && (
+              <div
+                className="absolute bottom-full mb-1 left-0 flex gap-1 bg-[#0d0d0d] border border-[#2a2a2a] rounded-lg p-1.5 z-10"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {EMOJI_LIST.map((e) => (
+                  <button
+                    key={e}
+                    onClick={() => onAddReaction(msg.id, e)}
+                    className="hover:scale-125 transition-transform text-base"
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+          {/* Reaction display */}
+          {hasReactions && (
+            <div className="flex gap-1 flex-wrap mt-1">
+              {Object.entries(msgReactions).map(([emoji, count]) => (
+                <button
+                  key={emoji}
+                  onClick={() => onAddReaction(msg.id, emoji)}
+                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-[#1a1a1a] border border-[#2a2a2a] text-xs hover:border-[#ffd700]/30 transition-colors"
+                >
+                  <span>{emoji}</span>
+                  <span className="text-gray-400 text-[10px]">{count}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <div className="text-[9px] text-gray-700 mt-1 ml-1">{ts}</div>
         </div>
       </div>
@@ -617,7 +866,11 @@ function MsgBubble({
   // User message
   const isMe = msg.userName === me.name && me.name !== ''
   return (
-    <div className={`flex gap-2.5 ${isMe ? 'justify-end' : 'justify-start'} msg-user`}>
+    <div
+      className={`flex gap-2.5 ${isMe ? 'justify-end' : 'justify-start'} msg-user`}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       {!isMe && (
         <div className="flex-shrink-0 text-xl mt-1" title={msg.userName}>
           {msg.userEmoji}
@@ -627,15 +880,66 @@ function MsgBubble({
         {!isMe && (
           <span className="text-[10px] text-gray-500 mb-1 ml-1">{msg.userName}</span>
         )}
-        <div
-          className={`rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words border-2 ${
-            isMe
-              ? 'bg-[#1a1a1a] border-[#2a2a2a] text-white rounded-br-none'
-              : 'bg-[#141414] border-[#1e1e1e] text-gray-100 rounded-tl-none'
-          }`}
-        >
-          {msg.content}
+        <div className="relative">
+          <div
+            className={`rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words border-2 ${
+              isMe
+                ? 'bg-[#1a1a1a] border-[#2a2a2a] text-white rounded-br-none'
+                : 'bg-[#141414] border-[#1e1e1e] text-gray-100 rounded-tl-none'
+            }`}
+          >
+            {msg.content}
+          </div>
+          {/* Hover action buttons */}
+          {hovered && (
+            <div className={`absolute -top-7 flex items-center gap-1 ${isMe ? 'right-0' : 'left-0'}`}>
+              <button
+                onClick={(e) => { e.stopPropagation(); onOpenReactionPicker(msg.id) }}
+                className="text-[10px] text-gray-500 hover:text-gray-200 bg-[#1a1a1a] border border-[#2a2a2a] rounded px-1.5 py-0.5 transition-colors"
+              >
+                + 반응
+              </button>
+              <button
+                onClick={() => onReply(msg)}
+                className="text-[10px] text-gray-500 hover:text-gray-200 bg-[#1a1a1a] border border-[#2a2a2a] rounded px-1.5 py-0.5 transition-colors"
+              >
+                ↩ 답장
+              </button>
+            </div>
+          )}
+          {/* Reaction picker */}
+          {reactionPickerFor === msg.id && (
+            <div
+              className={`absolute bottom-full mb-1 flex gap-1 bg-[#0d0d0d] border border-[#2a2a2a] rounded-lg p-1.5 z-10 ${isMe ? 'right-0' : 'left-0'}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {EMOJI_LIST.map((e) => (
+                <button
+                  key={e}
+                  onClick={() => onAddReaction(msg.id, e)}
+                  className="hover:scale-125 transition-transform text-base"
+                >
+                  {e}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+        {/* Reaction display */}
+        {hasReactions && (
+          <div className={`flex gap-1 flex-wrap mt-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
+            {Object.entries(msgReactions).map(([emoji, count]) => (
+              <button
+                key={emoji}
+                onClick={() => onAddReaction(msg.id, emoji)}
+                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-[#1a1a1a] border border-[#2a2a2a] text-xs hover:border-[#ffd700]/30 transition-colors"
+              >
+                <span>{emoji}</span>
+                <span className="text-gray-400 text-[10px]">{count}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className={`text-[9px] text-gray-700 mt-1 ${isMe ? 'mr-1' : 'ml-1'}`}>{ts}</div>
       </div>
       {isMe && (

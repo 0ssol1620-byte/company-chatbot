@@ -1,3 +1,7 @@
+// @deprecated - Legacy component for old team-based routing at /chat/[teamId]
+// New system uses /agents/[id] with user-created agents
+// TODO: Remove when /chat/[teamId] route is cleaned up
+
 'use client';
 
 import { useChat } from '@ai-sdk/react';
@@ -14,13 +18,6 @@ const colorMap: Record<string, string> = {
   green: 'bg-green-600',
   orange: 'bg-orange-500',
   purple: 'bg-purple-600',
-};
-
-const borderMap: Record<string, string> = {
-  blue: 'border-blue-600 focus:ring-blue-500',
-  green: 'border-green-600 focus:ring-green-500',
-  orange: 'border-orange-500 focus:ring-orange-400',
-  purple: 'border-purple-600 focus:ring-purple-500',
 };
 
 export function ChatInterface({ team }: ChatInterfaceProps) {
@@ -56,10 +53,9 @@ export function ChatInterface({ team }: ChatInterfaceProps) {
   };
 
   const accentColor = colorMap[team.color] ?? 'bg-gray-600';
-  const inputBorder = borderMap[team.color] ?? 'border-gray-400 focus:ring-gray-400';
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div className="flex flex-col h-screen bg-[#0a0a0a]">
       {/* Header */}
       <header className={`${accentColor} text-white px-6 py-4 shadow-md`}>
         <div className="max-w-3xl mx-auto flex items-center gap-3">
@@ -69,7 +65,7 @@ export function ChatInterface({ team }: ChatInterfaceProps) {
           <span className="text-white/40">|</span>
           <span className="text-xl">{team.emoji}</span>
           <div>
-            <h1 className="font-bold text-lg leading-tight">{team.name} AI 어시스턴트</h1>
+            <h1 className="font-bold text-lg leading-tight">{team.name} AI 어���스턴트</h1>
             <p className="text-white/70 text-xs">{team.description}</p>
           </div>
         </div>
@@ -79,12 +75,12 @@ export function ChatInterface({ team }: ChatInterfaceProps) {
       <main className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-3xl mx-auto space-y-4">
           {messages.length === 0 && (
-            <div className="text-center py-16 text-gray-400">
+            <div className="text-center py-16 text-gray-500">
               <div className="text-5xl mb-4">{team.emoji}</div>
-              <p className="text-lg font-medium text-gray-500">
+              <p className="text-lg font-medium text-gray-400">
                 {team.name} AI 어시스턴트입니다
               </p>
-              <p className="text-sm mt-1">{team.description}에 대해 질문해보세요.</p>
+              <p className="text-sm mt-1 text-gray-600">{team.description}에 대해 질문해보세요.</p>
             </div>
           )}
 
@@ -104,8 +100,8 @@ export function ChatInterface({ team }: ChatInterfaceProps) {
               <div
                 className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
                   message.role === 'user'
-                    ? 'bg-gray-800 text-white rounded-br-sm'
-                    : 'bg-white text-gray-800 shadow-sm border border-gray-100 rounded-bl-sm'
+                    ? 'bg-[#1a1a1a] text-white border border-[#2a2a2a] rounded-br-sm'
+                    : 'bg-[#141414] text-gray-200 border border-[#2a2a2a] rounded-bl-sm'
                 }`}
               >
                 {message.parts.map((part, i) =>
@@ -116,7 +112,7 @@ export function ChatInterface({ team }: ChatInterfaceProps) {
               </div>
 
               {message.role === 'user' && (
-                <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center text-sm flex-shrink-0 mt-1">
+                <div className="w-8 h-8 rounded-full bg-[#1a1a1a] border border-[#333] flex items-center justify-center text-sm text-gray-300 flex-shrink-0 mt-1">
                   나
                 </div>
               )}
@@ -130,18 +126,18 @@ export function ChatInterface({ team }: ChatInterfaceProps) {
               >
                 {team.emoji}
               </div>
-              <div className="bg-white rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm border border-gray-100">
+              <div className="bg-[#141414] rounded-2xl rounded-bl-sm px-4 py-3 border border-[#2a2a2a]">
                 <div className="flex gap-1 items-center h-5">
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0ms]" />
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:150ms]" />
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:300ms]" />
+                  <span className="w-2 h-2 bg-gray-600 rounded-full animate-bounce [animation-delay:0ms]" />
+                  <span className="w-2 h-2 bg-gray-600 rounded-full animate-bounce [animation-delay:150ms]" />
+                  <span className="w-2 h-2 bg-gray-600 rounded-full animate-bounce [animation-delay:300ms]" />
                 </div>
               </div>
             </div>
           )}
 
           {error && (
-            <div className="text-center text-red-500 text-sm py-2">
+            <div className="text-center text-red-400 text-sm py-2">
               오류가 발생했습니다. API 키를 확인해 주세요.
             </div>
           )}
@@ -151,7 +147,7 @@ export function ChatInterface({ team }: ChatInterfaceProps) {
       </main>
 
       {/* Input */}
-      <footer className="border-t border-gray-200 bg-white px-4 py-4">
+      <footer className="border-t border-[#1a1a1a] bg-[#0d0d0d] px-4 py-4">
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto flex gap-3 items-end">
           <textarea
             value={input}
@@ -159,7 +155,7 @@ export function ChatInterface({ team }: ChatInterfaceProps) {
             onKeyDown={handleKeyDown}
             placeholder="메시지를 입력하세요... (Enter: 전송, Shift+Enter: 줄바꿈)"
             rows={1}
-            className={`flex-1 resize-none rounded-xl border-2 ${inputBorder} px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-offset-1 transition-all max-h-40 overflow-y-auto`}
+            className="flex-1 resize-none rounded-xl px-4 py-3 text-sm max-h-40 overflow-y-auto"
             style={{ height: 'auto' }}
             onInput={(e) => {
               const el = e.currentTarget;
@@ -170,12 +166,12 @@ export function ChatInterface({ team }: ChatInterfaceProps) {
           <button
             type="submit"
             disabled={isLoading || !input.trim()}
-            className={`${accentColor} text-white px-5 py-3 rounded-xl font-medium text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity flex-shrink-0`}
+            className="nb-btn nb-btn-gold px-5 py-3 rounded-xl text-sm font-bold flex-shrink-0"
           >
             전송
           </button>
         </form>
-        <p className="text-center text-xs text-gray-400 mt-2">
+        <p className="text-center text-xs text-gray-700 mt-2">
           AI 답변은 참고용입니다. 중요한 사안은 담당자에게 확인하세요.
         </p>
       </footer>

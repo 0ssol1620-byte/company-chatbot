@@ -1,28 +1,123 @@
 'use client'
 
-import { use, useState, useEffect, useRef, useMemo } from 'react'
+import { use, useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import Link from 'next/link'
+import type { UIMessage } from 'ai'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Agent } from '@/types'
-import { getAgent, incrementMessageCount, LEVEL_NAMES } from '@/lib/agents'
+import { getAgent, incrementMessageCount, getLevelInfo } from '@/lib/agents'
 import { PixelCharacter } from '@/components/pixel-character'
 import { DotBackground } from '@/components/dot-background'
 
-// ── Level helpers ──────────────────────────────────────────────────────────────
-const LEVEL_THRESHOLDS = [0, 10, 30, 60, 100]
-const LEVEL_RANGES = [10, 20, 30, 40, Infinity]
-
-function getLevelProgress(count: number, level: number): number {
-  if (level >= 5) return 100
-  const min = LEVEL_THRESHOLDS[level - 1]
-  const range = LEVEL_RANGES[level - 1]
-  return Math.min(100, Math.round(((count - min) / range) * 100))
+// ── Markdown components ────────────────────────────────────────────────────────
+const markdownComponents = {
+  code({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) {
+    const isBlock = className?.includes('language-')
+    return isBlock ? (
+      <pre className="bg-[#0d0d0d] border border-[#2a2a2a] rounded p-3 overflow-x-auto my-2">
+        <code className="text-sm text-gray-200 font-mono">{children}</code>
+      </pre>
+    ) : (
+      <code className="bg-[#0d0d0d] px-1 py-0.5 rounded text-[#ffd700] text-sm font-mono" {...props}>{children}</code>
+    )
+  },
+  p({ children }: { children?: React.ReactNode }) { return <p className="mb-2 last:mb-0 leading-relaxed">{children}</p> },
+  ul({ children }: { children?: React.ReactNode }) { return <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul> },
+  ol({ children }: { children?: React.ReactNode }) { return <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol> },
+  h1({ children }: { children?: React.ReactNode }) { return <h1 className="text-base font-bold mb-2 text-white">{children}</h1> },
+  h2({ children }: { children?: React.ReactNode }) { return <h2 className="text-sm font-bold mb-2 text-white">{children}</h2> },
+  h3({ children }: { children?: React.ReactNode }) { return <h3 className="text-xs font-bold mb-1 text-gray-200">{children}</h3> },
+  a({ href, children }: { href?: string; children?: React.ReactNode }) {
+    return <a href={href} className="text-[#ffd700] underline hover:text-yellow-300" target="_blank" rel="noopener noreferrer">{children}</a>
+  },
+  blockquote({ children }: { children?: React.ReactNode }) {
+    return <blockquote className="border-l-2 border-[#333] pl-3 my-2 text-gray-400">{children}</blockquote>
+  },
 }
 
-function getUntilNext(count: number, level: number): number {
-  if (level >= 5) return 0
-  return Math.max(0, LEVEL_THRESHOLDS[level] - count)
+// ── Message text extraction ────────────────────────────────────────────────────
+function getMessageText(message: { parts: Array<{ type: string; text?: string }> }): string {
+  return message.parts
+    .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof p.text === 'string')
+    .map((p) => p.text)
+    .join('')
+}
+
+// ── Quick actions based on role ────────────────────────────────────────────────
+function getQuickActions(role: string): Array<{ label: string; text: string }> {
+  const lower = role.toLowerCase()
+  if (lower.includes('개발') || lower.includes('코드') || lower.includes('developer') || lower.includes('engineer')) {
+    return [
+      { label: '코드 리뷰', text: '이 코드를 리뷰해줘' },
+      { label: '버그 분석', text: '이 버그를 분석해줘' },
+      { label: '리팩토링 제안', text: '리팩토링 방법을 제안해줘' },
+    ]
+  }
+  if (lower.includes('hr') || lower.includes('인사') || lower.includes('human resource')) {
+    return [
+      { label: '정책 안내', text: '관련 인사 정책을 안내해줘' },
+      { label: '온보딩 체크리스트', text: '온보딩 체크리스트를 만들어줘' },
+      { label: '휴가 신청 안내', text: '휴가 신청 절차를 안내해줘' },
+    ]
+  }
+  if (lower.includes('마케팅') || lower.includes('마케터') || lower.includes('marketing')) {
+    return [
+      { label: '캠페인 아이디어', text: '새로운 캠페인 아이디어를 제안해줘' },
+      { label: '카피라이팅', text: '이 내용을 카피라이팅해줘' },
+      { label: '경쟁사 분석', text: '경쟁사 분석을 해줘' },
+    ]
+  }
+  return [
+    { label: '요약해줘', text: '방금 내용을 간단히 요약해줘' },
+    { label: '번역해줘', text: '한국어로 번역해줘' },
+    { label: '아이디어 제안', text: '아이디어를 제안해줘' },
+  ]
+}
+
+// ── Error message helper ───────────────────────────────────────────────────────
+function getErrorMessage(error: Error): string {
+  const msg = error.message?.toLowerCase() ?? ''
+  if (msg.includes('401') || msg.includes('unauthorized') || msg.includes('invalid api key')) {
+    return 'API 키가 올바르지 않습니다. 설정에서 확인해 주세요.'
+  }
+  if (msg.includes('429') || msg.includes('rate limit') || msg.includes('too many')) {
+    return '요청 한도를 초과했습니다. 잠시 후 시도해 주세요.'
+  }
+  return '오류가 발생했습니다. API 키와 네트워크를 확인해 주세요.'
+}
+
+// ── Confetti component ─────────────────────────────────────────────────────────
+function Confetti() {
+  const colors = ['#ffd700', '#ff6b6b', '#4ecdc4', '#a8e6cf', '#ff8b94', '#ffeaa7', '#dda0dd', '#98d8c8']
+  const dots = Array.from({ length: 20 }, (_, i) => ({
+    id: i,
+    color: colors[i % colors.length],
+    left: `${5 + Math.random() * 90}%`,
+    delay: `${Math.random() * 0.4}s`,
+    size: `${6 + Math.random() * 8}px`,
+  }))
+
+  return (
+    <div className="fixed inset-0 z-40 pointer-events-none overflow-hidden">
+      {dots.map((dot) => (
+        <div
+          key={dot.id}
+          className="absolute animate-confetti-fall rounded-sm"
+          style={{
+            left: dot.left,
+            bottom: '20%',
+            width: dot.size,
+            height: dot.size,
+            backgroundColor: dot.color,
+            animationDelay: dot.delay,
+          }}
+        />
+      ))}
+    </div>
+  )
 }
 
 // ── Page entry point (unwraps async params) ───────────────────────────────────
@@ -33,16 +128,16 @@ interface PageProps {
 export default function AgentChatPage({ params }: PageProps) {
   const { id } = use(params)
   const [agent, setAgent] = useState<Agent | null>(null)
-  const [savedMessages, setSavedMessages] = useState<unknown[]>([])
+  const [savedMessages, setSavedMessages] = useState<UIMessage[]>([])
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     const a = getAgent(id)
-    let msgs: unknown[] = []
+    let msgs: UIMessage[] = []
     try {
       const raw = localStorage.getItem(`agent-${id}-chat`)
       msgs = raw ? JSON.parse(raw) : []
-    } catch {}
+    } catch { /* ignore parse errors */ }
     setAgent(a)
     setSavedMessages(msgs)
     setLoaded(true)
@@ -90,9 +185,10 @@ function AgentChatUI({
   savedMessages,
 }: {
   agent: Agent
-  savedMessages: unknown[]
+  savedMessages: UIMessage[]
 }) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const lastCountedIdRef = useRef<string | null>(null)
   const prevStatusRef = useRef<string>('ready')
@@ -102,6 +198,10 @@ function AgentChatUI({
   const [currentCount, setCurrentCount] = useState(agent.messageCount)
   const [showLevelUp, setShowLevelUp] = useState(false)
   const [leveledUpTo, setLeveledUpTo] = useState(agent.level)
+  const [showConfetti, setShowConfetti] = useState(false)
+  const [showFlash, setShowFlash] = useState(false)
+  const [isAtBottom, setIsAtBottom] = useState(true)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const agentConfig = useMemo(
     () => ({
@@ -110,27 +210,28 @@ function AgentChatUI({
       apiKey: agent.apiKey,
       systemPrompt: agent.systemPrompt,
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [agent.id]
+    [agent.provider, agent.model, agent.apiKey, agent.systemPrompt]
   )
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { messages, sendMessage, status, error } = useChat({
+  const { messages, setMessages, sendMessage, status, error } = useChat({
     transport: new DefaultChatTransport({
       api: '/api/chat',
       body: { agentConfig },
     }),
-    messages: savedMessages as never,
+    messages: savedMessages as UIMessage[],
   })
 
   const isStreaming = status === 'submitted' || status === 'streaming'
+
+  const levelInfo = getLevelInfo(currentCount)
+  const quickActions = useMemo(() => getQuickActions(agent.role), [agent.role])
 
   // Persist messages
   useEffect(() => {
     if (messages.length > 0) {
       try {
         localStorage.setItem(`agent-${agent.id}-chat`, JSON.stringify(messages))
-      } catch {}
+      } catch { /* ignore storage errors */ }
     }
   }, [messages, agent.id])
 
@@ -143,10 +244,14 @@ function AgentChatUI({
         lastCountedIdRef.current = last.id
         const result = incrementMessageCount(agent.id)
         setCurrentCount((c) => c + 1)
-        if (result.leveled) {
+        if (result.leveledUp) {
           setLeveledUpTo(result.newLevel)
           setCurrentLevel(result.newLevel)
           setShowLevelUp(true)
+          setShowConfetti(true)
+          setShowFlash(true)
+          setTimeout(() => setShowFlash(false), 300)
+          setTimeout(() => setShowConfetti(false), 2500)
           setTimeout(() => setShowLevelUp(false), 2800)
         }
       }
@@ -154,10 +259,25 @@ function AgentChatUI({
     prevStatusRef.current = status
   }, [status, messages, agent.id])
 
-  // Auto-scroll
+  // Scroll tracking
+  const handleScroll = useCallback(() => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 50
+    setIsAtBottom(atBottom)
+  }, [])
+
+  // Auto-scroll when at bottom
   useEffect(() => {
+    if (isAtBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages, isStreaming, isAtBottom])
+
+  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isStreaming])
+    setIsAtBottom(true)
+  }
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -165,6 +285,7 @@ function AgentChatUI({
     if (!text || isStreaming) return
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    setIsAtBottom(true)
     await sendMessage({ text })
   }
 
@@ -177,17 +298,60 @@ function AgentChatUI({
 
   const handleClear = () => {
     if (confirm('대화 기록을 초기화할까요?')) {
-      localStorage.removeItem(`agent-${agent.id}-chat`)
-      window.location.reload()
+      try { localStorage.removeItem(`agent-${agent.id}-chat`) } catch { /* ignore */ }
+      setMessages([])
     }
   }
 
-  const progress = getLevelProgress(currentCount, currentLevel)
-  const untilNext = getUntilNext(currentCount, currentLevel)
+  const handleExport = () => {
+    const date = new Date().toLocaleString('ko-KR')
+    const lines = [
+      `[${agent.name}] 대화 기록`,
+      `내보내기: ${date}`,
+      '',
+      ...messages.map((m) => {
+        const content = getMessageText(m as unknown as { parts: Array<{ type: string; text?: string }> })
+        const label = m.role === 'user' ? '나' : agent.name
+        return `${label}: ${content}`
+      }),
+    ]
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${agent.name}-chat.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleCopy = (messageId: string, content: string) => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopiedId(messageId)
+      setTimeout(() => setCopiedId(null), 1500)
+    })
+  }
+
+  const handleQuickAction = (text: string) => {
+    setInput(text)
+    textareaRef.current?.focus()
+  }
+
+  const progress = levelInfo.progress
+  const untilNext = currentLevel < 5 ? Math.max(0, levelInfo.next - currentCount) : 0
   const modelLabel = agent.model.split('/').pop() ?? agent.model
+
+  const lastAssistantIndex = messages.reduce((acc, m, i) => m.role === 'assistant' ? i : acc, -1)
 
   return (
     <div className="flex flex-col h-screen" style={{ background: '#0a0a0a' }}>
+      {/* ── Screen flash overlay ── */}
+      {showFlash && (
+        <div className="fixed inset-0 z-50 pointer-events-none bg-white opacity-30" />
+      )}
+
+      {/* ── Confetti ── */}
+      {showConfetti && <Confetti />}
+
       {/* ── Header ── */}
       <header
         className="flex items-center justify-between px-4 py-3 border-b border-[#1a1a1a] flex-shrink-0 gap-3"
@@ -219,6 +383,15 @@ function AgentChatUI({
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
+          {messages.length > 0 && (
+            <button
+              onClick={handleExport}
+              className="text-gray-700 hover:text-gray-400 transition-colors text-sm"
+              title="대화 내보내기"
+            >
+              📥
+            </button>
+          )}
           <button
             onClick={handleClear}
             className="text-gray-700 hover:text-gray-400 transition-colors text-sm"
@@ -266,7 +439,7 @@ function AgentChatUI({
               >
                 LV.{currentLevel}
               </span>
-              <span className="text-gray-600 text-[9px]">{LEVEL_NAMES[currentLevel]}</span>
+              <span className="text-gray-600 text-[9px]">{levelInfo.title}</span>
             </div>
             <div className="h-2 bg-[#1a1a1a] rounded-full border border-[#2a2a2a] overflow-hidden">
               <div
@@ -308,7 +481,11 @@ function AgentChatUI({
         </aside>
 
         {/* Messages */}
-        <main className="flex-1 overflow-y-auto p-4 space-y-4">
+        <main
+          ref={messagesContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto p-4 space-y-4 relative"
+        >
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full gap-5 text-center">
               <div className="sm:hidden">
@@ -330,45 +507,79 @@ function AgentChatUI({
             </div>
           )}
 
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex gap-3 msg-${message.role === 'user' ? 'user' : 'agent'} ${
-                message.role === 'user' ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              {message.role === 'assistant' && (
-                <div className="flex-shrink-0 mt-1">
-                  <PixelCharacter type={agent.avatar} size={32} />
-                </div>
-              )}
+          {messages.map((message, index) => {
+            const isLastAssistant = index === lastAssistantIndex
+            const isStreamingThisMsg = isLastAssistant && isStreaming && message.role === 'assistant'
+            const messageText = getMessageText(message as unknown as { parts: Array<{ type: string; text?: string }> })
 
+            return (
               <div
-                className={`max-w-[75%] rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words ${
-                  message.role === 'user'
-                    ? 'bg-[#1a1a1a] border-2 border-[#2a2a2a] text-white rounded-br-none'
-                    : 'bg-[#141414] border-2 text-gray-100 rounded-bl-none'
+                key={message.id}
+                className={`flex gap-3 group msg-${message.role === 'user' ? 'user' : 'agent'} ${
+                  message.role === 'user' ? 'justify-end' : 'justify-start'
                 }`}
-                style={
-                  message.role === 'assistant'
-                    ? { borderColor: `${agent.color}44` }
-                    : undefined
-                }
               >
-                {message.parts.map((part, i) =>
-                  part.type === 'text' ? <span key={i}>{part.text}</span> : null
+                {message.role === 'assistant' && (
+                  <div className="flex-shrink-0 mt-1">
+                    <PixelCharacter type={agent.avatar} size={32} />
+                  </div>
+                )}
+
+                <div className="relative max-w-[75%]">
+                  <div
+                    className={`rounded-xl px-4 py-3 text-sm leading-relaxed break-words ${
+                      message.role === 'user'
+                        ? 'bg-[#1a1a1a] border-2 border-[#2a2a2a] text-white rounded-br-none'
+                        : 'bg-[#141414] border-2 text-gray-100 rounded-bl-none'
+                    }`}
+                    style={
+                      message.role === 'assistant'
+                        ? { borderColor: `${agent.color}44` }
+                        : undefined
+                    }
+                  >
+                    {message.role === 'user' ? (
+                      <span>{messageText}</span>
+                    ) : isStreamingThisMsg ? (
+                      <span>
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={markdownComponents}
+                        >
+                          {messageText}
+                        </ReactMarkdown>
+                        <span className="animate-pulse text-[#ffd700]">▋</span>
+                      </span>
+                    ) : (
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={markdownComponents}
+                      >
+                        {messageText}
+                      </ReactMarkdown>
+                    )}
+                  </div>
+
+                  {/* Copy button on hover */}
+                  <button
+                    onClick={() => handleCopy(message.id, messageText)}
+                    className={`absolute ${message.role === 'user' ? '-left-8 top-2' : '-right-8 top-2'} opacity-0 group-hover:opacity-100 transition-opacity text-xs text-gray-600 hover:text-gray-300 p-1`}
+                    title="복사"
+                  >
+                    {copiedId === message.id ? '✓' : '📋'}
+                  </button>
+                </div>
+
+                {message.role === 'user' && (
+                  <div
+                    className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold border-2 border-[#2a2a2a] mt-1 bg-[#1a1a1a] text-gray-300"
+                  >
+                    나
+                  </div>
                 )}
               </div>
-
-              {message.role === 'user' && (
-                <div
-                  className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold border-2 border-[#2a2a2a] mt-1 bg-[#1a1a1a] text-gray-300"
-                >
-                  나
-                </div>
-              )}
-            </div>
-          ))}
+            )
+          })}
 
           {/* Thinking dots when waiting for first token */}
           {isStreaming && messages[messages.length - 1]?.role !== 'assistant' && (
@@ -391,11 +602,22 @@ function AgentChatUI({
 
           {error && (
             <div className="mx-auto max-w-md text-center text-xs text-red-400 bg-[#1a0000] border border-red-900/50 rounded-lg px-4 py-3">
-              ⚠ 오류가 발생했습니다. API 키와 네트워크를 확인해 주세요.
+              ⚠ {getErrorMessage(error)}
             </div>
           )}
 
           <div ref={messagesEndRef} />
+
+          {/* Scroll to bottom button */}
+          {!isAtBottom && (
+            <button
+              onClick={scrollToBottom}
+              className="fixed bottom-24 right-6 w-9 h-9 rounded-full bg-[#1a1a1a] border border-[#333] text-gray-400 hover:text-white hover:border-[#555] transition-all flex items-center justify-center text-sm shadow-lg z-10"
+              title="맨 아래로"
+            >
+              ↓
+            </button>
+          )}
         </main>
       </div>
 
@@ -420,7 +642,7 @@ function AgentChatUI({
               LEVEL UP!
             </p>
             <p className="text-white text-sm mt-2">
-              LV.{leveledUpTo}&nbsp;&nbsp;{LEVEL_NAMES[leveledUpTo]}
+              LV.{leveledUpTo}&nbsp;&nbsp;{getLevelInfo((leveledUpTo - 1) * 20).title}
             </p>
             <p className="text-gray-500 text-xs mt-1">{agent.name}이(가) 성장했습니다!</p>
           </div>
@@ -432,38 +654,55 @@ function AgentChatUI({
         className="border-t border-[#1a1a1a] p-4 flex-shrink-0"
         style={{ background: '#0d0d0d' }}
       >
-        <form onSubmit={handleSubmit} className="flex gap-3 items-end max-w-4xl mx-auto">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onInput={(e) => {
-              const el = e.currentTarget
-              el.style.height = 'auto'
-              el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-            }}
-            placeholder={`${agent.name}에게 메시지를 보내세요...`}
-            rows={1}
-            disabled={isStreaming}
-            className="flex-1 resize-none rounded-xl px-4 py-3 text-sm max-h-40 overflow-y-auto transition-colors"
-            style={{
-              background: '#1a1a1a',
-              border: `2px solid ${isStreaming ? '#2a2a2a' : '#333'}`,
-              color: '#ededed',
-            }}
-          />
-          <button
-            type="submit"
-            disabled={isStreaming || !input.trim()}
-            className="nb-btn nb-btn-gold px-5 py-3 rounded-xl text-sm font-bold flex-shrink-0"
-          >
-            {isStreaming ? '···' : '전송'}
-          </button>
-        </form>
-        <p className="text-center text-[10px] text-gray-700 mt-2">
-          Enter: 전송 · Shift+Enter: 줄바꿈
-        </p>
+        <div className="max-w-4xl mx-auto">
+          {/* Quick action buttons */}
+          {messages.length > 0 && !isStreaming && (
+            <div className="flex gap-2 mb-3 flex-wrap">
+              {quickActions.map(({ label, text }) => (
+                <button
+                  key={label}
+                  onClick={() => handleQuickAction(text)}
+                  className="px-3 py-1 rounded-full text-xs border border-[#2a2a2a] bg-[#1a1a1a] text-gray-400 hover:text-white hover:border-[#444] transition-colors"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="flex gap-3 items-end">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onInput={(e) => {
+                const el = e.currentTarget
+                el.style.height = 'auto'
+                el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+              }}
+              placeholder={`${agent.name}에게 메시지를 보내세요...`}
+              rows={1}
+              disabled={isStreaming}
+              className="flex-1 resize-none rounded-xl px-4 py-3 text-sm max-h-40 overflow-y-auto transition-colors"
+              style={{
+                background: '#1a1a1a',
+                border: `2px solid ${isStreaming ? '#2a2a2a' : '#333'}`,
+                color: '#ededed',
+              }}
+            />
+            <button
+              type="submit"
+              disabled={isStreaming || !input.trim()}
+              className="nb-btn nb-btn-gold px-5 py-3 rounded-xl text-sm font-bold flex-shrink-0"
+            >
+              {isStreaming ? '···' : '전송'}
+            </button>
+          </form>
+          <p className="text-center text-[10px] text-gray-700 mt-2">
+            Enter: 전송 · Shift+Enter: 줄바꿈
+          </p>
+        </div>
       </footer>
     </div>
   )

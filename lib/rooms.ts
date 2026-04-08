@@ -17,7 +17,7 @@ export function getOrCreateUser(): ChatUser {
       const user = JSON.parse(stored) as ChatUser
       return user
     }
-  } catch {}
+  } catch { /* ignore parse errors */ }
   return {
     name: '',
     emoji: USER_EMOJIS[Math.floor(Math.random() * USER_EMOJIS.length)],
@@ -26,7 +26,7 @@ export function getOrCreateUser(): ChatUser {
 
 export function saveUser(user: ChatUser): void {
   if (typeof window === 'undefined') return
-  localStorage.setItem(USER_KEY, JSON.stringify(user))
+  try { localStorage.setItem(USER_KEY, JSON.stringify(user)) } catch { /* ignore */ }
 }
 
 export function getRooms(): Room[] {
@@ -48,13 +48,15 @@ export function saveRoom(room: Room): void {
   const idx = rooms.findIndex((r) => r.id === room.id)
   if (idx === -1) rooms.push(room)
   else rooms[idx] = room
-  localStorage.setItem(ROOMS_KEY, JSON.stringify(rooms))
+  try { localStorage.setItem(ROOMS_KEY, JSON.stringify(rooms)) } catch { /* ignore */ }
 }
 
 export function deleteRoom(id: string): void {
   const rooms = getRooms().filter((r) => r.id !== id)
-  localStorage.setItem(ROOMS_KEY, JSON.stringify(rooms))
-  localStorage.removeItem(`room-${id}-messages`)
+  try {
+    localStorage.setItem(ROOMS_KEY, JSON.stringify(rooms))
+    localStorage.removeItem(`room-${id}-messages`)
+  } catch { /* ignore */ }
 }
 
 export function getRoomMessages(roomId: string): RoomMessage[] {
@@ -72,7 +74,7 @@ export function addRoomMessage(roomId: string, message: RoomMessage): void {
   messages.push(message)
   // Keep last 500 messages
   if (messages.length > 500) messages.splice(0, messages.length - 500)
-  localStorage.setItem(`room-${roomId}-messages`, JSON.stringify(messages))
+  try { localStorage.setItem(`room-${roomId}-messages`, JSON.stringify(messages)) } catch { /* ignore */ }
 }
 
 export function updateRoomAgents(roomId: string, agentIds: string[]): void {
