@@ -212,8 +212,9 @@ function AgentChatUI({
       model: agent.model,
       apiKey: agent.apiKey,
       systemPrompt: agent.systemPrompt,
+      files: agent.files,
     }),
-    [agent.provider, agent.model, agent.apiKey, agent.systemPrompt]
+    [agent.provider, agent.model, agent.apiKey, agent.systemPrompt, agent.files]
   )
 
   const { messages, setMessages, sendMessage, status, error } = useChat({

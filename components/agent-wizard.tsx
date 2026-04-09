@@ -144,17 +144,18 @@ export function AgentWizard() {
 
     for (const file of Array.from(fileList)) {
       try {
-        const formData = new FormData()
-        formData.append('file', file)
-        const res = await fetch('/api/files/upload', { method: 'POST', body: formData })
-        if (!res.ok) continue
-        const data = await res.json()
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
         const newFile: AgentFile = {
           id: crypto.randomUUID(),
-          name: data.name,
-          blobUrl: data.url,
-          contentType: data.contentType,
-          size: data.size,
+          name: file.name,
+          blobUrl: dataUrl,
+          contentType: file.type || 'application/octet-stream',
+          size: file.size,
         }
         setFiles((prev) => [...prev, newFile])
       } catch {

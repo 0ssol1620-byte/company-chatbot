@@ -15,6 +15,7 @@
     "@ai-sdk/react": "^3.0.151",
     "ai": "^6.0.149",
     "next": "16.2.2",
+    "phaser": "^3.90.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
