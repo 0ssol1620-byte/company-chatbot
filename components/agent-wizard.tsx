@@ -15,12 +15,17 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   google: 'Google',
+  groq: 'Groq',
+  mistral: 'Mistral',
+  ollama: 'Ollama',
 }
 
-const API_KEY_LINKS: Record<Provider, string> = {
+const API_KEY_LINKS: Partial<Record<Provider, string>> = {
   openai: 'https://platform.openai.com/api-keys',
   anthropic: 'https://console.anthropic.com/settings/keys',
   google: 'https://aistudio.google.com/app/apikey',
+  groq: 'https://console.groq.com/keys',
+  mistral: 'https://console.mistral.ai/api-keys',
 }
 
 const STEPS = ['캐릭터 선택', '기본 정보', 'LLM 설정', '시스템 프롬프트', '파일 업로드']
@@ -70,6 +75,7 @@ export function AgentWizard() {
   const [provider, setProvider] = useState<Provider>('openai')
   const [model, setModel] = useState('gpt-4o')
   const [apiKey, setApiKey] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
 
   // Step 4
@@ -89,7 +95,7 @@ export function AgentWizard() {
     switch (step) {
       case 0: return true
       case 1: return name.trim().length > 0 && role.trim().length > 0
-      case 2: return model.length > 0 && apiKey.trim().length > 0
+      case 2: return model.length > 0 && (provider === 'ollama' || apiKey.trim().length > 0)
       case 3: return true
       case 4: return true
       default: return false
@@ -181,6 +187,7 @@ export function AgentWizard() {
       provider,
       model,
       apiKey,
+      ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
       systemPrompt: systemPrompt || `당신은 ${name}입니다. ${role} 전문가로서 사용자를 돕습니다. 항상 한국어로 답변하세요.`,
       files,
       messageCount: 0,
@@ -317,16 +324,17 @@ export function AgentWizard() {
                 <div className="space-y-4">
                   <h2 className="text-white font-bold mb-4">LLM 설정</h2>
 
-                  {/* Provider tabs */}
-                  <div className="flex gap-2">
+                  {/* Provider tabs — 2 rows on mobile */}
+                  <div className="flex flex-wrap gap-2">
                     {(Object.keys(MODELS) as Provider[]).map((p) => (
                       <button
                         key={p}
                         onClick={() => {
                           setProvider(p)
                           setModel(MODELS[p][0].id)
+                          setApiKey('')
                         }}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold border-2 transition-all ${
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition-all ${
                           provider === p
                             ? 'border-white bg-white text-black'
                             : 'border-[#333] text-gray-400 hover:border-[#555]'
@@ -337,53 +345,96 @@ export function AgentWizard() {
                     ))}
                   </div>
 
-                  {/* Model grid */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {MODELS[provider].map((m) => (
-                      <button
-                        key={m.id}
-                        onClick={() => setModel(m.id)}
-                        className={`text-left p-3 rounded-lg border-2 transition-all ${
-                          model === m.id
-                            ? 'border-[#ffd700] bg-[#1a1a1a]'
-                            : 'border-[#333] hover:border-[#555] bg-[#0a0a0a]'
-                        }`}
-                      >
-                        <div className="text-sm font-bold text-white">{m.name}</div>
-                        <div className="text-xs text-gray-400 mt-0.5">{m.description}</div>
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* API Key */}
-                  <div>
-                    <label className="text-xs text-gray-400 mb-1 block">API Key *</label>
-                    <div className="relative">
-                      <input
-                        type={showApiKey ? 'text' : 'password'}
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        placeholder="sk-..."
-                        className="w-full px-3 py-2.5 rounded-lg text-sm pr-16"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowApiKey(!showApiKey)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-white px-2 py-1"
-                      >
-                        {showApiKey ? '숨기기' : '보기'}
-                      </button>
+                  {/* Ollama: custom model text input */}
+                  {provider === 'ollama' ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs text-gray-400 mb-1 block">모델 이름</label>
+                        <input
+                          type="text"
+                          value={model}
+                          onChange={(e) => setModel(e.target.value)}
+                          placeholder="llama3.2, mistral, gemma3 ..."
+                          className="w-full px-3 py-2.5 rounded-lg text-sm"
+                        />
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {MODELS.ollama.map((m) => (
+                            <button key={m.id} onClick={() => setModel(m.id)}
+                              className="text-xs px-2 py-0.5 rounded border border-[#333] text-gray-400 hover:border-[#555] hover:text-white bg-[#0a0a0a]">
+                              {m.id}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-400 mb-1 block">서버 URL (선택)</label>
+                        <input
+                          type="text"
+                          value={baseUrl}
+                          onChange={(e) => setBaseUrl(e.target.value)}
+                          placeholder="http://localhost:11434/v1"
+                          className="w-full px-3 py-2.5 rounded-lg text-sm"
+                        />
+                        <p className="text-xs text-gray-600 mt-1">기본값: http://localhost:11434/v1</p>
+                      </div>
                     </div>
-                    <a
-                      href={API_KEY_LINKS[provider]}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs mt-1 inline-block hover:underline"
-                      style={{ color }}
-                    >
-                      {PROVIDER_LABELS[provider]} API Key 발급받기 &rarr;
-                    </a>
-                  </div>
+                  ) : (
+                    <>
+                      {/* Model grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {(MODELS[provider] as readonly { id: string; name: string; description: string }[]).map((m) => (
+                          <button
+                            key={m.id}
+                            onClick={() => setModel(m.id)}
+                            className={`text-left p-3 rounded-lg border-2 transition-all ${
+                              model === m.id
+                                ? 'border-[#ffd700] bg-[#1a1a1a]'
+                                : 'border-[#333] hover:border-[#555] bg-[#0a0a0a]'
+                            }`}
+                          >
+                            <div className="text-sm font-bold text-white">{m.name}</div>
+                            <div className="text-xs text-gray-400 mt-0.5">{m.description}</div>
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* API Key */}
+                      <div>
+                        <label className="text-xs text-gray-400 mb-1 block">API Key *</label>
+                        <div className="relative">
+                          <input
+                            type={showApiKey ? 'text' : 'password'}
+                            value={apiKey}
+                            onChange={(e) => setApiKey(e.target.value)}
+                            placeholder={
+                              provider === 'anthropic' ? 'sk-ant-...' :
+                              provider === 'google' ? 'AIza...' :
+                              provider === 'groq' ? 'gsk_...' : 'sk-...'
+                            }
+                            className="w-full px-3 py-2.5 rounded-lg text-sm pr-16"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowApiKey(!showApiKey)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-white px-2 py-1"
+                          >
+                            {showApiKey ? '숨기기' : '보기'}
+                          </button>
+                        </div>
+                        {API_KEY_LINKS[provider] && (
+                          <a
+                            href={API_KEY_LINKS[provider]}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs mt-1 inline-block hover:underline"
+                            style={{ color }}
+                          >
+                            {PROVIDER_LABELS[provider]} API Key 발급받기 &rarr;
+                          </a>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 

@@ -11,6 +11,7 @@ import { Agent } from '@/types'
 import { getAgent, incrementMessageCount, getLevelInfo } from '@/lib/agents'
 import { PixelCharacter } from '@/components/pixel-character'
 import { DotBackground } from '@/components/dot-background'
+import { buildMemoryContext, hydrateFromServer } from '@/lib/npc-memory'
 
 // ── Markdown components ────────────────────────────────────────────────────────
 const markdownComponents = {
@@ -205,16 +206,25 @@ function AgentChatUI({
   const [showFlash, setShowFlash] = useState(false)
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [memorySystemPrompt, setMemorySystemPrompt] = useState(agent.systemPrompt)
+
+  // Hydrate memory from server on mount, then rebuild system prompt with memory context
+  useEffect(() => {
+    hydrateFromServer(agent.id).then(() => {
+      setMemorySystemPrompt(buildMemoryContext(agent.systemPrompt, agent.id))
+    })
+  }, [agent.id, agent.systemPrompt])
 
   const agentConfig = useMemo(
     () => ({
       provider: agent.provider,
       model: agent.model,
       apiKey: agent.apiKey,
-      systemPrompt: agent.systemPrompt,
+      baseUrl: agent.baseUrl,
+      systemPrompt: memorySystemPrompt,
       files: agent.files,
     }),
-    [agent.provider, agent.model, agent.apiKey, agent.systemPrompt, agent.files]
+    [agent.provider, agent.model, agent.apiKey, agent.baseUrl, memorySystemPrompt, agent.files]
   )
 
   const { messages, setMessages, sendMessage, status, error } = useChat({
@@ -239,7 +249,7 @@ function AgentChatUI({
     }
   }, [messages, agent.id])
 
-  // Level-up detection: fires once when streaming completes
+  // Level-up detection + memory extraction: fires once when streaming completes
   useEffect(() => {
     if (prevStatusRef.current !== 'ready' && status === 'ready') {
       const assistantMsgs = messages.filter((m) => m.role === 'assistant')
@@ -258,10 +268,47 @@ function AgentChatUI({
           setTimeout(() => setShowConfetti(false), 2500)
           setTimeout(() => setShowLevelUp(false), 2800)
         }
+
+        // Fire-and-forget memory extraction
+        const userMsgs = messages.filter((m) => m.role === 'user')
+        const lastUser = userMsgs[userMsgs.length - 1]
+        const userText = lastUser?.parts?.find((p: { type: string }) => p.type === 'text')
+        const npcText = last.parts?.find((p: { type: string }) => p.type === 'text')
+        if (userText && npcText && agent.apiKey) {
+          fetch('/api/memory-extract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agentConfig: { provider: agent.provider, model: agent.model, apiKey: agent.apiKey },
+              userMessage: (userText as { text: string }).text,
+              npcResponse: (npcText as { text: string }).text,
+            }),
+          })
+            .then((r) => r.json())
+            .then((extracted) => {
+              if (!extracted || (!extracted.longTerm?.length && !extracted.shortTerm?.length && !extracted.userProfile?.length)) return
+              fetch('/api/agent-memory', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  npcId: agent.id,
+                  longTerm: extracted.longTerm ?? [],
+                  shortTerm: extracted.shortTerm ?? [],
+                  userProfile: extracted.userProfile ?? [],
+                }),
+              })
+                .then(() => {
+                  // Rebuild memory context with new facts
+                  setMemorySystemPrompt(buildMemoryContext(agent.systemPrompt, agent.id))
+                })
+                .catch(() => {})
+            })
+            .catch(() => {})
+        }
       }
     }
     prevStatusRef.current = status
-  }, [status, messages, agent.id])
+  }, [status, messages, agent.id, agent.provider, agent.model, agent.apiKey, agent.systemPrompt])
 
   // Scroll tracking
   const handleScroll = useCallback(() => {

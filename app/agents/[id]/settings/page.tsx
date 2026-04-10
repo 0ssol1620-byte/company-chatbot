@@ -15,6 +15,9 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   google: 'Google',
+  groq: 'Groq',
+  mistral: 'Mistral',
+  ollama: 'Ollama',
 }
 
 interface PageProps {
@@ -279,13 +282,14 @@ export default function AgentSettingsPage({ params }: PageProps) {
             >
               LLM 설정
             </h2>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               {(Object.keys(MODELS) as Provider[]).map((p) => (
                 <button
                   key={p}
                   onClick={() => {
                     setProvider(p)
                     setModel(MODELS[p][0].id)
+                    setApiKey('')
                   }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition-all ${
                     provider === p
@@ -297,44 +301,59 @@ export default function AgentSettingsPage({ params }: PageProps) {
                 </button>
               ))}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {MODELS[provider].map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setModel(m.id)}
-                  className={`text-left p-3 rounded-lg border-2 transition-all ${
-                    model === m.id
-                      ? 'border-[#ffd700] bg-[#1a1a1a]'
-                      : 'border-[#222] hover:border-[#444] bg-[#0d0d0d]'
-                  }`}
-                >
-                  <div className="text-xs font-bold text-white">{m.name}</div>
-                  <div className="text-[10px] text-gray-500 mt-0.5">{m.description}</div>
-                </button>
-              ))}
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1.5 block">API Key</label>
-              <div className="relative">
+            {provider === 'ollama' ? (
+              <div>
+                <label className="text-xs text-gray-500 mb-1.5 block">모델 이름</label>
                 <input
-                  type={showApiKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="API 키 입력..."
-                  className="w-full px-3 py-2.5 rounded-lg text-sm pr-16"
+                  type="text"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="llama3.2, mistral, gemma3 ..."
+                  className="w-full px-3 py-2.5 rounded-lg text-sm"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-white px-2 py-1 transition-colors"
-                >
-                  {showApiKey ? '숨기기' : '보기'}
-                </button>
               </div>
-              <p className="text-[10px] text-yellow-600 mt-2">
-                ⚠ API 키는 브라우저의 localStorage에 저장됩니다. 공용 기기에서는 사용 후 반드시 삭제해 주세요.
-              </p>
-            </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {(MODELS[provider] as readonly { id: string; name: string; description: string }[]).map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setModel(m.id)}
+                    className={`text-left p-3 rounded-lg border-2 transition-all ${
+                      model === m.id
+                        ? 'border-[#ffd700] bg-[#1a1a1a]'
+                        : 'border-[#222] hover:border-[#444] bg-[#0d0d0d]'
+                    }`}
+                  >
+                    <div className="text-xs font-bold text-white">{m.name}</div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">{m.description}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+            {provider !== 'ollama' && (
+              <div>
+                <label className="text-xs text-gray-500 mb-1.5 block">API Key</label>
+                <div className="relative">
+                  <input
+                    type={showApiKey ? 'text' : 'password'}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="API 키 입력..."
+                    className="w-full px-3 py-2.5 rounded-lg text-sm pr-16"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-white px-2 py-1 transition-colors"
+                  >
+                    {showApiKey ? '숨기기' : '보기'}
+                  </button>
+                </div>
+                <p className="text-[10px] text-yellow-600 mt-2">
+                  ⚠ API 키는 브라우저의 localStorage에 저장됩니다. 공용 기기에서는 사용 후 반드시 삭제해 주세요.
+                </p>
+              </div>
+            )}
           </section>
 
           {/* ── System prompt ── */}

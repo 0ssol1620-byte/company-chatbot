@@ -2,6 +2,8 @@ import { streamText } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
+import { createGroq } from '@ai-sdk/groq'
+import { createMistral } from '@ai-sdk/mistral'
 
 export const maxDuration = 300
 
@@ -30,9 +32,10 @@ export async function POST(req: Request) {
     return new Response('agentConfig is required', { status: 400 })
   }
 
-  const { provider, model, apiKey, systemPrompt, files } = agentConfig
+  const { provider, model, apiKey, systemPrompt, files, baseUrl } = agentConfig
 
-  if (!apiKey) {
+  // Ollama doesn't need an API key (local server)
+  if (provider !== 'ollama' && !apiKey) {
     return new Response('API key is required', { status: 400 })
   }
 
@@ -60,6 +63,13 @@ export async function POST(req: Request) {
       aiModel = createAnthropic({ apiKey })(model)
     } else if (provider === 'google') {
       aiModel = createGoogleGenerativeAI({ apiKey })(model)
+    } else if (provider === 'groq') {
+      aiModel = createGroq({ apiKey })(model)
+    } else if (provider === 'mistral') {
+      aiModel = createMistral({ apiKey })(model)
+    } else if (provider === 'ollama') {
+      const ollamaBaseUrl = (baseUrl as string | undefined) || 'http://localhost:11434/v1'
+      aiModel = createOpenAI({ apiKey: 'ollama', baseURL: ollamaBaseUrl })(model)
     } else {
       return new Response(`Unknown provider: ${provider}`, { status: 400 })
     }
