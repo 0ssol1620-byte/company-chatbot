@@ -2,8 +2,6 @@ import { streamText } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
-import { createGroq } from '@ai-sdk/groq'
-import { createMistral } from '@ai-sdk/mistral'
 
 export const maxDuration = 300
 
@@ -62,10 +60,6 @@ export async function POST(req: Request) {
       aiModel = createAnthropic({ apiKey })(model)
     } else if (provider === 'google') {
       aiModel = createGoogleGenerativeAI({ apiKey })(model)
-    } else if (provider === 'groq') {
-      aiModel = createGroq({ apiKey })(model)
-    } else if (provider === 'mistral') {
-      aiModel = createMistral({ apiKey })(model)
     } else {
       return new Response(`Unknown provider: ${provider}`, { status: 400 })
     }

@@ -13,8 +13,7 @@ import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createGroq } from "@ai-sdk/groq";
-import { createMistral } from "@ai-sdk/mistral";
+
 interface MemoryExtractionResult {
   longTerm: string[];
   shortTerm: string[];
@@ -63,10 +62,6 @@ export async function POST(req: Request) {
       aiModel = createAnthropic({ apiKey })(model);
     } else if (provider === "google") {
       aiModel = createGoogleGenerativeAI({ apiKey })(model);
-    } else if (provider === "groq") {
-      aiModel = createGroq({ apiKey })(model);
-    } else if (provider === "mistral") {
-      aiModel = createMistral({ apiKey })(model);
     } else {
       return Response.json({ longTerm: [], shortTerm: [], userProfile: [] });
     }
@@ -86,7 +81,6 @@ export async function POST(req: Request) {
       ],
     });
 
-    // Parse the JSON response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return Response.json({ longTerm: [], shortTerm: [], userProfile: [] });

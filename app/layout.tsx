@@ -9,8 +9,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "ViewChat - 사내 AI 어시스턴트",
-  description: "AI 에이전트가 함께하는 사내 오피스",
+  title: "VieworksRPG — AI 직원과 함께하는 사내 오피스",
+  description: "AI 에이전트가 함께하는 픽셀 아트 사내 오피스",
 };
 
 export default function RootLayout({

@@ -1,6 +1,6 @@
 export type OfficerType = 'developer' | 'marketer' | 'analyst' | 'planner' | 'hr' | 'sales'
 export type AvatarType = OfficerType  // backward compat alias
-export type Provider = 'openai' | 'anthropic' | 'google' | 'groq' | 'mistral'
+export type Provider = 'openai' | 'anthropic' | 'google'
 
 export interface AgentFile {
   id: string

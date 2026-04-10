@@ -17,7 +17,7 @@ export interface LocalCharacter {
 }
 
 export interface LocalAgentConfig {
-  provider: "openai" | "anthropic" | "google" | "groq" | "mistral";
+  provider: "openai" | "anthropic" | "google";
   model: string;
   apiKey: string;
   systemPrompt: string;
@@ -38,7 +38,7 @@ export interface LocalAgent {
   role: string;
   description: string;
   color: string;
-  provider: "openai" | "anthropic" | "google" | "groq" | "mistral";
+  provider: "openai" | "anthropic" | "google";
   model: string;
   apiKey: string;
   systemPrompt: string;

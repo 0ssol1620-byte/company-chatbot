@@ -29,8 +29,8 @@ import {
 } from "@/lib/local-store";
 
 const APP_VERSION = "2026.4.6";
-const BUG_REPORT_BASE_URL = "https://github.com/dandacompany/deskrpg/issues/new";
-const SOURCE_CODE_URL = "https://github.com/dandacompany/deskrpg";
+const BUG_REPORT_BASE_URL = "https://github.com/0ssol1620-byte/company-chatbot/issues/new";
+const SOURCE_CODE_URL = "https://github.com/0ssol1620-byte/company-chatbot";
 const LICENSE_URL = `${SOURCE_CODE_URL}/blob/main/LICENSE.md`;
 const THIRD_PARTY_LICENSES_URL = "/third-party-licenses.html";
 const AVATAR_ASSET_CREDITS_URL = "/assets/spritesheets/CREDITS.md";
@@ -387,18 +387,39 @@ function GamePageInner() {
     characterNameRef.current = char.name;
     setIsOwner(true);
 
-    // Set pending channel data
+    // Load office map then hand off to GameScene
     const savedPos = getPlayerPosition();
-    const nextPendingChannelData: PendingChannelData = {
-      channelId: "default",
-      mapData: null,
-      tiledJson: undefined,
-      mapConfig: { spawnCol: 5, spawnRow: 5 },
-      savedPosition: savedPos,
-      reportWaitSeconds: 20,
-    };
-    setPendingChannelData(nextPendingChannelData);
-    setGameChannelData(nextPendingChannelData);
+    fetch("/assets/small-office-map.json")
+      .then((r) => r.json())
+      .then((mapJson) => {
+        const nextPendingChannelData: PendingChannelData = {
+          channelId: "default",
+          mapData: mapJson,
+          tiledJson: mapJson.tiledJson ?? undefined,
+          mapConfig: {
+            spawnCol: mapJson.spawnCol ?? 10,
+            spawnRow: mapJson.spawnRow ?? 7,
+          },
+          savedPosition: savedPos,
+          reportWaitSeconds: 20,
+        };
+        setPendingChannelData(nextPendingChannelData);
+        setGameChannelData(nextPendingChannelData);
+        EventBus.emit("channel-data-ready");
+      })
+      .catch(() => {
+        // Fallback: empty map so scene doesn't hang
+        const fallback: PendingChannelData = {
+          channelId: "default",
+          mapData: null,
+          tiledJson: undefined,
+          mapConfig: { spawnCol: 5, spawnRow: 5 },
+          savedPosition: savedPos,
+          reportWaitSeconds: 20,
+        };
+        setPendingChannelData(fallback);
+        setGameChannelData(fallback);
+      });
 
     // Load NPCs and tasks
     const npcs = getNpcs();
@@ -955,7 +976,7 @@ function GamePageInner() {
           direction: pendingNpc.direction || "down",
           appearance: pendingNpc.appearance,
           agentConfig: {
-            provider: (pendingNpc.provider as "openai" | "anthropic" | "google" | "groq" | "mistral") || "openai",
+            provider: (pendingNpc.provider as "openai" | "anthropic" | "google") || "openai",
             model: pendingNpc.model || "gpt-4o",
             apiKey: pendingNpc.apiKey || "",
             systemPrompt: pendingNpc.systemPrompt || pendingNpc.persona || "",
@@ -1131,7 +1152,7 @@ function GamePageInner() {
       <div className="fixed top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-2 bg-black/50 backdrop-blur-sm">
         {/* Left: Channel name — Character name */}
         <h1 className="text-lg font-bold">
-          DeskRPG &mdash; {character?.name}
+          VieworksRPG &mdash; {character?.name}
         </h1>
 
         {/* Right: grouped controls */}
@@ -1518,7 +1539,7 @@ function GamePageInner() {
               if (existing) {
                 lsUpdates.agentConfig = {
                   ...existing.agentConfig,
-                  ...(updates.provider && { provider: updates.provider as "openai" | "anthropic" | "google" | "groq" | "mistral" }),
+                  ...(updates.provider && { provider: updates.provider as "openai" | "anthropic" | "google" }),
                   ...(updates.model && { model: updates.model }),
                   ...(updates.apiKey && { apiKey: updates.apiKey }),
                   ...(updates.systemPrompt && { systemPrompt: updates.systemPrompt }),

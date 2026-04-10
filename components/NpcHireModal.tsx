@@ -27,11 +27,9 @@ const DIRECTION_LABELS: { id: string; label: string }[] = [
 const MAX_NPC_COUNT = 10;
 
 const MODELS_BY_PROVIDER: Record<string, string[]> = {
-  openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"],
-  anthropic: ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
-  google: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
-  groq: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
-  mistral: ["mistral-large-latest", "mistral-small-latest", "open-mixtral-8x22b", "codestral-latest"],
+  openai: ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o3", "o4-mini"],
+  anthropic: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+  google: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"],
 };
 
 // ---------------------------------------------------------------------------
@@ -121,7 +119,7 @@ export default function NpcHireModal({
   const [personaPresetId, setPersonaPresetId] = useState<string>("custom");
 
   // AI provider fields (direct AI SDK integration)
-  const [aiProvider, setAiProvider] = useState<"openai" | "anthropic" | "google" | "groq" | "mistral">("openai");
+  const [aiProvider, setAiProvider] = useState<"openai" | "anthropic" | "google">("openai");
   const [aiModel, setAiModel] = useState("");
   const [aiApiKey, setAiApiKey] = useState("");
   const [aiSystemPrompt, setAiSystemPrompt] = useState("");
@@ -512,22 +510,18 @@ export default function NpcHireModal({
 // AI Provider Section sub-component
 // ---------------------------------------------------------------------------
 
-type AiProvider = "openai" | "anthropic" | "google" | "groq" | "mistral";
+type AiProvider = "openai" | "anthropic" | "google";
 
 const PROVIDER_LABELS: Record<AiProvider, string> = {
   openai: "OpenAI",
   anthropic: "Anthropic (Claude)",
   google: "Google (Gemini)",
-  groq: "Groq (Fast inference)",
-  mistral: "Mistral AI",
 };
 
 const API_KEY_PLACEHOLDER: Record<AiProvider, string> = {
   openai: "sk-...",
   anthropic: "sk-ant-...",
   google: "AIza...",
-  groq: "gsk_...",
-  mistral: "...",
 };
 
 function formatBytes(bytes: number): string {
@@ -544,8 +538,8 @@ function AiProviderSection({
   files, setFiles,
   t,
 }: {
-  provider: AiProvider;
-  setProvider: (v: AiProvider) => void;
+  provider: "openai" | "anthropic" | "google";
+  setProvider: (v: "openai" | "anthropic" | "google") => void;
   model: string;
   setModel: (v: string) => void;
   apiKey: string;
