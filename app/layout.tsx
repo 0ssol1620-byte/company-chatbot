@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { ToastProvider } from "@/components/toast";
+import { I18nProvider } from "@/lib/i18n";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -9,8 +9,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "AGENT ROSTER - 사내 AI 어시스턴트",
-  description: "당신만의 AI 에이전트를 고용하세요",
+  title: "ViewChat - 사내 AI 어시스턴트",
+  description: "AI 에이전트가 함께하는 사내 오피스",
 };
 
 export default function RootLayout({
@@ -20,14 +20,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko" className={`${inter.variable} h-full`}>
-      <head>
-        <link
-          href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap"
-          rel="stylesheet"
-        />
-      </head>
-      <body className="min-h-full flex flex-col bg-[#0a0a0a] text-[#ededed]">
-        <ToastProvider>{children}</ToastProvider>
+      <body className="min-h-full flex flex-col">
+        <I18nProvider initialLocale="ko">
+          {children}
+        </I18nProvider>
       </body>
     </html>
   );

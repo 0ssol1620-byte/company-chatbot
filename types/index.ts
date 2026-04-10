@@ -1,6 +1,6 @@
 export type OfficerType = 'developer' | 'marketer' | 'analyst' | 'planner' | 'hr' | 'sales'
 export type AvatarType = OfficerType  // backward compat alias
-export type Provider = 'openai' | 'anthropic' | 'google' | 'groq' | 'mistral' | 'ollama'
+export type Provider = 'openai' | 'anthropic' | 'google' | 'groq' | 'mistral'
 
 export interface AgentFile {
   id: string
@@ -20,7 +20,6 @@ export interface Agent {
   provider: Provider
   model: string
   apiKey: string
-  /** For Ollama: base URL of the local server (default: http://localhost:11434/v1) */
   baseUrl?: string
   systemPrompt: string
   files: AgentFile[]

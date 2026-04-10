@@ -15,7 +15,11 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createGroq } from "@ai-sdk/groq";
 import { createMistral } from "@ai-sdk/mistral";
-import type { MemoryExtractionResult } from "@/lib/npc-memory";
+interface MemoryExtractionResult {
+  longTerm: string[];
+  shortTerm: string[];
+  userProfile: Array<{ key: string; value: string }>;
+}
 
 export const maxDuration = 30;
 
@@ -63,9 +67,6 @@ export async function POST(req: Request) {
       aiModel = createGroq({ apiKey })(model);
     } else if (provider === "mistral") {
       aiModel = createMistral({ apiKey })(model);
-    } else if (provider === "ollama") {
-      const baseURL = (agentConfig.baseUrl as string | undefined) || "http://localhost:11434/v1";
-      aiModel = createOpenAI({ apiKey: "ollama", baseURL })(model);
     } else {
       return Response.json({ longTerm: [], shortTerm: [], userProfile: [] });
     }

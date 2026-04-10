@@ -32,10 +32,9 @@ export async function POST(req: Request) {
     return new Response('agentConfig is required', { status: 400 })
   }
 
-  const { provider, model, apiKey, systemPrompt, files, baseUrl } = agentConfig
+  const { provider, model, apiKey, systemPrompt, files } = agentConfig
 
-  // Ollama doesn't need an API key (local server)
-  if (provider !== 'ollama' && !apiKey) {
+  if (!apiKey) {
     return new Response('API key is required', { status: 400 })
   }
 
@@ -67,9 +66,6 @@ export async function POST(req: Request) {
       aiModel = createGroq({ apiKey })(model)
     } else if (provider === 'mistral') {
       aiModel = createMistral({ apiKey })(model)
-    } else if (provider === 'ollama') {
-      const ollamaBaseUrl = (baseUrl as string | undefined) || 'http://localhost:11434/v1'
-      aiModel = createOpenAI({ apiKey: 'ollama', baseURL: ollamaBaseUrl })(model)
     } else {
       return new Response(`Unknown provider: ${provider}`, { status: 400 })
     }
