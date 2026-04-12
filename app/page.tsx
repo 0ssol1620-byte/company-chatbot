@@ -20,6 +20,7 @@ import TaskBoard from "@/components/TaskBoard";
 import type { Task } from "@/components/TaskCard";
 import { sanitizeNpcResponseText } from "@/lib/task-block-utils.js";
 import { LocalMultiplayer, getTabId } from "@/lib/local-multiplayer";
+import { SupabaseMultiplayer, type PlayerPresence } from "@/lib/supabase-multiplayer";
 import {
   getCharacter, getNpcs, addNpc, updateNpc, removeNpc,
   getTasks, upsertTask, removeTask, removeTasksForNpc,
@@ -242,6 +243,8 @@ function GamePageInner() {
 
   // LocalMultiplayer (BroadcastChannel for tab sync)
   const localMultiplayer = useRef<LocalMultiplayer | null>(null);
+  // SupabaseMultiplayer (Realtime Presence + Broadcast for cross-machine sync)
+  const supabaseMultiplayer = useRef<SupabaseMultiplayer | null>(null);
 
   const openBugReport = useCallback(() => {
     const userAgent = typeof window !== "undefined" ? window.navigator.userAgent : "unknown";
@@ -458,6 +461,56 @@ function GamePageInner() {
       setChannelNpcs(prev => prev.map(n => n.id === npcId ? { ...n, ...updates } : n));
     });
 
+    // Supabase Realtime — cross-machine player sync
+    const sm = new SupabaseMultiplayer(char.id || crypto.randomUUID());
+    supabaseMultiplayer.current = sm;
+
+    sm.on('player:joined', (data) => {
+      const p = data as PlayerPresence;
+      setChannelPlayers(prev => {
+        if (prev.some(x => x.id === p.playerId)) return prev;
+        return [...prev, { id: p.playerId, name: p.name, appearance: p.appearance as CharacterAppearance | LegacyCharacterAppearance | null }];
+      });
+      EventBus.emit('player:joined', p);
+    });
+
+    sm.on('player:left', (data) => {
+      const p = data as { playerId: string };
+      setChannelPlayers(prev => prev.filter(x => x.id !== p.playerId));
+      EventBus.emit('player:left', p);
+    });
+
+    sm.on('presence:sync', (data) => {
+      const state = data as Record<string, PlayerPresence[]>;
+      const players = Object.entries(state).map(([id, presences]) => ({
+        id,
+        name: presences[0]?.name || 'Unknown',
+        appearance: (presences[0]?.appearance as CharacterAppearance | LegacyCharacterAppearance | null) || null,
+      }));
+      setChannelPlayers(prev => {
+        // Keep self, merge others
+        const self = prev.find(p => p.id === '__self__');
+        const others = players.filter(p => p.id !== (char.id || ''));
+        return self ? [self, ...others] : others;
+      });
+    });
+
+    sm.on('chat:message', (data) => {
+      const msg = data as ChannelChatMessage;
+      setChannelMessages(prev => [...prev, msg]);
+    });
+
+    sm.on('player:moved', (data) => {
+      const { playerId, x, y } = data as { playerId: string; x: number; y: number };
+      EventBus.emit('player:moved', { playerId, x, y });
+    });
+
+    sm.subscribe({
+      playerId: char.id || 'unknown',
+      name: char.name,
+      appearance: char.appearance,
+    }).catch(console.error);
+
     // Composite player sprite
     const canvas = document.createElement("canvas");
     canvasRef.current = canvas;
@@ -473,6 +526,8 @@ function GamePageInner() {
     return () => {
       lm.disconnect();
       localMultiplayer.current = null;
+      sm.disconnect();
+      supabaseMultiplayer.current = null;
     };
   }, [router]);
 
@@ -949,6 +1004,8 @@ function GamePageInner() {
     };
     setChannelMessages(prev => [...prev, msg]);
     EventBus.emit("chat:bubble", { senderId: msg.senderId });
+    // Broadcast to all players across machines
+    supabaseMultiplayer.current?.emit('chat:message', msg as unknown as Record<string, unknown>).catch(console.error);
   }, [character]);
 
   // Emit owner status when scene is ready
@@ -959,6 +1016,16 @@ function GamePageInner() {
     EventBus.on("scene-ready", onSceneReady);
     return () => { EventBus.off("scene-ready", onSceneReady); };
   }, [isOwner]);
+
+  // Forward local player movement to Supabase for cross-machine sync
+  useEffect(() => {
+    const onPlayerMoved = (data: unknown) => {
+      const { playerId, x, y } = data as { playerId: string; x: number; y: number };
+      supabaseMultiplayer.current?.emit('player:moved', { playerId, x, y }).catch(() => {});
+    };
+    EventBus.on('player:moved-local', onPlayerMoved);
+    return () => { EventBus.off('player:moved-local', onPlayerMoved); };
+  }, []);
 
   // Placement mode coordination
   useEffect(() => {

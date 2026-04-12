@@ -8,6 +8,7 @@ import type {
   CharacterAppearance,
   LegacyCharacterAppearance,
 } from "@/lib/lpc-registry";
+import { getNpcs } from "@/lib/local-store";
 import MinutesModal from "./MinutesModal";
 import { useLocale, useT } from "@/lib/i18n";
 import { ChevronDown, ChevronUp, Pause, Play } from "lucide-react";
@@ -177,6 +178,7 @@ export default function MeetingRoom({
   const [npcStreams, setNpcStreams] = useState<Record<string, string>>({});
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [input, setInput] = useState("");
+  const [playerInput, setPlayerInput] = useState("");
   const [cooldown, setCooldown] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const joinedRef = useRef(false);
@@ -674,6 +676,114 @@ export default function MeetingRoom({
     setCooldown(true);
     setTimeout(() => setCooldown(false), 2000);
   }, [input, cooldown, socket, channelId, meetingActive]);
+
+  const handlePlayerSend = useCallback(async () => {
+    const trimmed = playerInput.trim();
+    if (!trimmed) return;
+    setPlayerInput("");
+
+    // Append player message
+    const playerMsg: MeetingMessage = {
+      id: `player-${Date.now()}`,
+      sender: tRef.current("meeting.youLabel") || "나",
+      senderId: "self",
+      senderType: "user",
+      content: trimmed,
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => appendMeetingMessage(prev, playerMsg));
+
+    // Detect @mention
+    const mentionMatch = trimmed.match(/^@(\S+)\s*(.*)$/);
+    if (!mentionMatch) return;
+    const targetName = mentionMatch[1];
+    const userMessage = mentionMatch[2] || trimmed;
+
+    // Find matching NPC from current participants
+    const targetParticipant = npcParticipants.find(
+      (p) => p.name === targetName || p.name.toLowerCase() === targetName.toLowerCase(),
+    );
+    if (!targetParticipant) return;
+
+    const rawNpcId = targetParticipant.id.replace(/^npc-/, "");
+    const storedNpc = getNpcs().find((n) => n.id === rawNpcId);
+    if (!storedNpc?.agentConfig?.apiKey) return;
+
+    setCurrentSpeaker({ npcId: rawNpcId, npcName: targetParticipant.name });
+    setNpcStreams((prev) => ({ ...prev, [rawNpcId]: "" }));
+    npcStreamsRef.current = { ...npcStreamsRef.current, [rawNpcId]: "" };
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: userMessage }],
+          agentConfig: storedNpc.agentConfig,
+        }),
+      });
+
+      if (!res.ok || !res.body) throw new Error("chat request failed");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      let buffered = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+
+        // Parse SSE-style UI message stream: lines like `data: {"type":"text-delta","delta":"..."}\n\n`
+        const lines = buffered.split("\n");
+        buffered = lines.pop() || "";
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine.startsWith("data:")) continue;
+          const jsonStr = trimmedLine.slice(5).trim();
+          if (!jsonStr || jsonStr === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(jsonStr) as { type?: string; delta?: string; text?: string };
+            if (parsed.type === "text-delta" && typeof parsed.delta === "string") {
+              accumulated += parsed.delta;
+            } else if (parsed.type === "text" && typeof parsed.text === "string") {
+              accumulated += parsed.text;
+            }
+          } catch {
+            // ignore partial json
+          }
+        }
+
+        const sanitized = sanitizeClientStreamingSpeech(accumulated);
+        npcStreamsRef.current = { ...npcStreamsRef.current, [rawNpcId]: sanitized };
+        setNpcStreams((prev) => ({ ...prev, [rawNpcId]: sanitized }));
+      }
+
+      // Finalize
+      const finalizedMsg: MeetingMessage = {
+        id: `npc-${rawNpcId}-${Date.now()}`,
+        sender: targetParticipant.name,
+        senderId: `npc-${rawNpcId}`,
+        senderType: "npc",
+        content: sanitizeClientFinalSpeech(accumulated),
+        timestamp: Date.now(),
+      };
+      setMessages((prev) => appendMeetingMessage(prev, finalizedMsg));
+      setLastSpokeTimes((prev) => ({ ...prev, [rawNpcId]: Date.now() }));
+      const nextStreams = { ...npcStreamsRef.current };
+      delete nextStreams[rawNpcId];
+      npcStreamsRef.current = nextStreams;
+      setNpcStreams(nextStreams);
+      setCurrentSpeaker(null);
+    } catch {
+      const nextStreams = { ...npcStreamsRef.current };
+      delete nextStreams[rawNpcId];
+      npcStreamsRef.current = nextStreams;
+      setNpcStreams(nextStreams);
+      setCurrentSpeaker(null);
+    }
+  }, [playerInput, npcParticipants]);
 
   const sceneParticipants = [currentUser, ...otherParticipants];
   const layout = computeMeetingTableLayout({

@@ -61,7 +61,7 @@ function SetupPageInner() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-white mb-2">
-            ViewChat
+            VieworksRPG
           </h1>
           <p className="text-gray-400 text-sm">
             {t("character.setupTitle") || "캐릭터를 만들어 사무실에 입장하세요"}
