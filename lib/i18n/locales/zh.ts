@@ -1987,6 +1987,24 @@ const zh: Record<string, string> = {
   "errors.agentInUseByNpc": "该代理当前正被 NPC 使用",
   "errors.failedToRemoveAgentFromGateway": "无法从网关删除代理",
   "errors.templateDeleteConfirm": "要删除“{name}”吗？此操作无法撤销。",
+
+  // Setup / character creation
+  "character.setupTitle": "创建角色进入办公室",
+  "character.appearance": "外观设置",
+  "character.preview": "预览",
+  "character.name": "角色名称",
+  "character.namePlaceholder": "输入名称...",
+  "character.nameRequired": "请输入名称。",
+  "character.enterOffice": "进入办公室 →",
+  "character.randomize": "🎲 随机",
+
+  // Map editor
+  "game.mapEditor": "地图编辑",
+  "game.mapEditorActive": "编辑中",
+  "game.visitPlayer": "访问",
+  "game.supabaseConnecting": "连接中...",
+  "game.supabaseError": "连接错误",
+  "game.unreadMessages": "未读消息",
 };
 
 export default zh;

@@ -6,7 +6,7 @@ import { useT } from "@/lib/i18n";
 import CharacterPreview from "@/components/CharacterPreview";
 import AppearanceEditor from "@/components/AppearanceEditor";
 import { useCharacterAppearance } from "@/hooks/useCharacterAppearance";
-import { saveCharacter } from "@/lib/local-store";
+import { saveCharacter, getCharacter } from "@/lib/local-store";
 
 export default function SetupPage() {
   const t = useT();
@@ -39,15 +39,17 @@ function SetupPageInner() {
 
   const handleSave = async () => {
     if (!name.trim()) {
-      setError(t("character.nameRequired") || "이름을 입력해주세요.");
+      setError(t("character.nameRequired"));
       return;
     }
     setSaving(true);
     setError("");
 
+    // Preserve existing character ID so it's stable across sessions (M4)
+    const existingChar = getCharacter();
     const builtAppearance = buildAppearance();
     saveCharacter({
-      id: crypto.randomUUID(),
+      id: existingChar?.id || crypto.randomUUID(),
       name: name.trim(),
       appearance: builtAppearance,
     });
@@ -64,7 +66,7 @@ function SetupPageInner() {
             VieworksRPG
           </h1>
           <p className="text-gray-400 text-sm">
-            {t("character.setupTitle") || "캐릭터를 만들어 사무실에 입장하세요"}
+            {t("character.setupTitle")}
           </p>
         </div>
 
@@ -72,7 +74,7 @@ function SetupPageInner() {
           {/* Appearance editor */}
           <div className="bg-gray-800 rounded-xl p-6">
             <h2 className="text-white font-semibold mb-4">
-              {t("character.appearance") || "외관 설정"}
+              {t("character.appearance")}
             </h2>
             <AppearanceEditor
               bodyType={bodyType}
@@ -93,7 +95,7 @@ function SetupPageInner() {
                   onClick={randomize}
                   className="px-3 py-1.5 text-xs rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
                 >
-                  🎲 랜덤
+                  {t("character.randomize")}
                 </button>
               }
             />
@@ -103,7 +105,7 @@ function SetupPageInner() {
           <div className="flex flex-col gap-4">
             <div className="bg-gray-800 rounded-xl p-6 flex flex-col items-center gap-4">
               <h2 className="text-white font-semibold self-start">
-                {t("character.preview") || "미리보기"}
+                {t("character.preview")}
               </h2>
               <CharacterPreview
                 appearance={buildAppearance()}
@@ -114,7 +116,7 @@ function SetupPageInner() {
 
             <div className="bg-gray-800 rounded-xl p-6">
               <label className="block text-sm text-gray-400 mb-2">
-                {t("character.name") || "캐릭터 이름"}
+                {t("character.name")}
               </label>
               <input
                 type="text"
@@ -122,7 +124,7 @@ function SetupPageInner() {
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSave()}
                 maxLength={20}
-                placeholder={t("character.namePlaceholder") || "이름 입력..."}
+                placeholder={t("character.namePlaceholder")}
                 className="w-full bg-gray-700 text-white rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 autoFocus
               />
@@ -136,9 +138,7 @@ function SetupPageInner() {
               disabled={saving || !name.trim()}
               className="w-full py-3 rounded-xl font-bold text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
             >
-              {saving
-                ? (t("common.loading") || "로딩...")
-                : (t("character.enterOffice") || "사무실 입장하기 →")}
+              {saving ? t("common.loading") : t("character.enterOffice")}
             </button>
           </div>
         </div>

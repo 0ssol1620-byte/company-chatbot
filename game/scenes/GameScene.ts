@@ -1234,6 +1234,17 @@ export class GameScene extends Phaser.Scene {
     });
     EventBus.on("owner-status", (data: { isOwner: boolean }) => { this.isChannelOwner = data.isOwner; });
 
+    // Map editor toggle from toolbar
+    EventBus.on("toggle-editor", () => this.toggleEditor());
+
+    // Teleport to another player's position
+    EventBus.on("teleport-to-player", (data: { playerId: string }) => {
+      const remote = this.remotePlayers.get(data.playerId);
+      if (remote && this.player) {
+        this.player.setPosition(remote.targetX, remote.targetY);
+      }
+    });
+
     // Local NPC spawn/remove (from own hire/fire actions)
     EventBus.on("npc:spawn-local", (raw: { id: string; name: string; positionX: number; positionY: number; direction?: string; appearance?: unknown }) => {
       const npcData: NpcData = { ...raw, direction: raw.direction || "down" };
@@ -2400,45 +2411,17 @@ export class GameScene extends Phaser.Scene {
       objects: this.mapObjects,
     };
 
-    // Save to localStorage (may fail in restricted contexts)
-    try {
-      if (typeof localStorage !== "undefined") {
-        localStorage.setItem("deskrpg-map-office", JSON.stringify(mapData));
-      }
-    } catch {
-      // Storage access denied — skip
-    }
+    // Persist via EventBus → page.tsx saves to localStorage (local-store)
+    EventBus.emit("map:saved", mapData);
 
-    // Save to server (channel API if available, otherwise legacy maps API)
-    const saveUrl = this.channelId
-      ? `/api/channels/${this.channelId}`
-      : "/api/maps/office";
-    const saveMethod = this.channelId ? "PUT" : "POST";
-    const saveBody = this.channelId
-      ? { mapData }
-      : { mapId: "office", layers: mapData };
-    fetch(saveUrl, {
-      method: saveMethod,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(saveBody),
-    })
-      .then((res) => {
-        if (res.ok) {
-          // Flash the save button green
-          const saveBtn = this.children.getByName("editor-save-btn") as Phaser.GameObjects.Text | null;
-          if (saveBtn) {
-            saveBtn.setText("[ SAVED! ]");
-            this.time.delayedCall(1500, () => {
-              if (saveBtn.active) saveBtn.setText("[ SAVE MAP ]");
-            });
-          }
-        } else {
-          console.error("[MapEditor] Server save failed:", res.status);
-        }
-      })
-      .catch((err) => {
-        console.error("[MapEditor] Server save error:", err);
+    // Flash the save button green
+    const saveBtn = this.children.getByName("editor-save-btn") as Phaser.GameObjects.Text | null;
+    if (saveBtn) {
+      saveBtn.setText("[ SAVED! ]");
+      this.time.delayedCall(1500, () => {
+        if (saveBtn.active) saveBtn.setText("[ SAVE MAP ]");
       });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -2833,6 +2816,8 @@ export class GameScene extends Phaser.Scene {
     this.lastSentAnim = animation;
 
     this.localMultiplayer.emit("player:move", { x, y, direction, animation });
+    // Also forward to Supabase for cross-machine sync
+    EventBus.emit("player:moved-local", { playerId: this.characterId, x, y, direction, animation });
   }
 
   // ---------------------------------------------------------------------------

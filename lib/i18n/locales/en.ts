@@ -1988,6 +1988,24 @@ const en: Record<string, string> = {
   "errors.agentInUseByNpc": "This agent is currently used by an NPC",
   "errors.failedToRemoveAgentFromGateway": "Failed to remove agent from gateway",
   "errors.templateDeleteConfirm": "Delete \"{name}\"? This cannot be undone.",
+
+  // Setup / character creation
+  "character.setupTitle": "Create your character to enter the office",
+  "character.appearance": "Appearance",
+  "character.preview": "Preview",
+  "character.name": "Character Name",
+  "character.namePlaceholder": "Enter name...",
+  "character.nameRequired": "Please enter a name.",
+  "character.enterOffice": "Enter Office →",
+  "character.randomize": "🎲 Random",
+
+  // Map editor
+  "game.mapEditor": "Map Editor",
+  "game.mapEditorActive": "Editing",
+  "game.visitPlayer": "Visit",
+  "game.supabaseConnecting": "Connecting...",
+  "game.supabaseError": "Connection Error",
+  "game.unreadMessages": "Unread messages",
 };
 
 export default en;

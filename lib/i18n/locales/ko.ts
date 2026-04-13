@@ -1989,6 +1989,24 @@ const ko: Record<string, string> = {
   "errors.agentInUseByNpc": "이 에이전트는 현재 NPC가 사용 중입니다",
   "errors.failedToRemoveAgentFromGateway": "게이트웨이에서 에이전트를 삭제하지 못했습니다",
   "errors.templateDeleteConfirm": "\"{name}\"을(를) 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
+
+  // Setup / character creation
+  "character.setupTitle": "캐릭터를 만들어 사무실에 입장하세요",
+  "character.appearance": "외관 설정",
+  "character.preview": "미리보기",
+  "character.name": "캐릭터 이름",
+  "character.namePlaceholder": "이름 입력...",
+  "character.nameRequired": "이름을 입력해주세요.",
+  "character.enterOffice": "사무실 입장하기 →",
+  "character.randomize": "🎲 랜덤",
+
+  // Map editor
+  "game.mapEditor": "맵 편집",
+  "game.mapEditorActive": "편집 중",
+  "game.visitPlayer": "방문",
+  "game.supabaseConnecting": "연결 중...",
+  "game.supabaseError": "연결 오류",
+  "game.unreadMessages": "읽지 않은 메시지",
 };
 
 export default ko;

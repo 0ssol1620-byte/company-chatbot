@@ -693,16 +693,22 @@ export default function MeetingRoom({
     };
     setMessages((prev) => appendMeetingMessage(prev, playerMsg));
 
-    // Detect @mention
-    const mentionMatch = trimmed.match(/^@(\S+)\s*(.*)$/);
-    if (!mentionMatch) return;
-    const targetName = mentionMatch[1];
-    const userMessage = mentionMatch[2] || trimmed;
+    // Detect @mention — longest-match against participant names (supports names with spaces)
+    let targetParticipant: (typeof npcParticipants)[number] | undefined;
+    let userMessage = trimmed;
 
-    // Find matching NPC from current participants
-    const targetParticipant = npcParticipants.find(
-      (p) => p.name === targetName || p.name.toLowerCase() === targetName.toLowerCase(),
-    );
+    if (trimmed.startsWith("@")) {
+      const trimmedLower = trimmed.toLowerCase();
+      const sorted = [...npcParticipants].sort((a, b) => b.name.length - a.name.length);
+      for (const p of sorted) {
+        const mention = "@" + p.name;
+        if (trimmedLower.startsWith(mention.toLowerCase())) {
+          targetParticipant = p;
+          userMessage = trimmed.slice(mention.length).trim() || trimmed;
+          break;
+        }
+      }
+    }
     if (!targetParticipant) return;
 
     const rawNpcId = targetParticipant.id.replace(/^npc-/, "");
@@ -713,12 +719,19 @@ export default function MeetingRoom({
     setNpcStreams((prev) => ({ ...prev, [rawNpcId]: "" }));
     npcStreamsRef.current = { ...npcStreamsRef.current, [rawNpcId]: "" };
 
+    // Build conversation history for context (M5)
+    const contextMessages = messages.slice(-8).map(m => ({
+      role: m.senderType === "user" ? "user" as const : "assistant" as const,
+      content: m.content,
+    }));
+    contextMessages.push({ role: "user", content: userMessage });
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          messages: [{ role: "user", content: userMessage }],
+          messages: contextMessages,
           agentConfig: storedNpc.agentConfig,
         }),
       });
@@ -783,7 +796,7 @@ export default function MeetingRoom({
       setNpcStreams(nextStreams);
       setCurrentSpeaker(null);
     }
-  }, [playerInput, npcParticipants]);
+  }, [playerInput, npcParticipants, messages]);
 
   const sceneParticipants = [currentUser, ...otherParticipants];
   const layout = computeMeetingTableLayout({

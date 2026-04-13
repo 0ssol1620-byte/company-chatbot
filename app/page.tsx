@@ -26,6 +26,7 @@ import {
   getTasks, upsertTask, removeTask, removeTasksForNpc,
   getNpcChat, appendNpcChat, clearNpcChat,
   getMeetings, savePlayerPosition, getPlayerPosition,
+  getChannel, saveChannel,
   type LocalNpc,
 } from "@/lib/local-store";
 
@@ -197,7 +198,15 @@ function GamePageInner() {
   // Channel chat state
   const [channelMessages, setChannelMessages] = useState<ChannelChatMessage[]>([]);
   const [channelChatOpen, setChannelChatOpen] = useState(false);
+  const channelChatOpenRef = useRef(false);
   const [channelChatInputDisabled, setChannelChatInputDisabled] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+
+  // Map editor state (H1)
+  const [editorModeActive, setEditorModeActive] = useState(false);
+
+  // Supabase connection state (H4)
+  const [supabaseStatus, setSupabaseStatus] = useState<"connecting" | "connected" | "error">("connecting");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -391,38 +400,54 @@ function GamePageInner() {
     setIsOwner(true);
 
     // Load office map then hand off to GameScene
+    // Priority: 1) user-edited map in localStorage, 2) bundled static JSON
     const savedPos = getPlayerPosition();
-    fetch("/assets/small-office-map.json")
-      .then((r) => r.json())
-      .then((mapJson) => {
-        const nextPendingChannelData: PendingChannelData = {
-          channelId: "default",
-          mapData: mapJson,
-          tiledJson: mapJson.tiledJson ?? undefined,
-          mapConfig: {
-            spawnCol: mapJson.spawnCol ?? 10,
-            spawnRow: mapJson.spawnRow ?? 7,
-          },
-          savedPosition: savedPos,
-          reportWaitSeconds: 20,
-        };
-        setPendingChannelData(nextPendingChannelData);
-        setGameChannelData(nextPendingChannelData);
-        EventBus.emit("channel-data-ready");
-      })
-      .catch(() => {
-        // Fallback: empty map so scene doesn't hang
-        const fallback: PendingChannelData = {
-          channelId: "default",
-          mapData: null,
-          tiledJson: undefined,
-          mapConfig: { spawnCol: 5, spawnRow: 5 },
-          savedPosition: savedPos,
-          reportWaitSeconds: 20,
-        };
-        setPendingChannelData(fallback);
-        setGameChannelData(fallback);
-      });
+    const savedChannel = getChannel();
+    if (savedChannel?.mapData) {
+      const channelData: PendingChannelData = {
+        channelId: "default",
+        mapData: savedChannel.mapData,
+        tiledJson: (savedChannel.mapData as Record<string, unknown>)?.tiledJson as object | undefined,
+        mapConfig: savedChannel.mapConfig ?? { spawnCol: 10, spawnRow: 7 },
+        savedPosition: savedPos,
+        reportWaitSeconds: 20,
+      };
+      setPendingChannelData(channelData);
+      setGameChannelData(channelData);
+      EventBus.emit("channel-data-ready");
+    } else {
+      fetch("/assets/small-office-map.json")
+        .then((r) => r.json())
+        .then((mapJson) => {
+          const nextPendingChannelData: PendingChannelData = {
+            channelId: "default",
+            mapData: mapJson,
+            tiledJson: mapJson.tiledJson ?? undefined,
+            mapConfig: {
+              spawnCol: mapJson.spawnCol ?? 10,
+              spawnRow: mapJson.spawnRow ?? 7,
+            },
+            savedPosition: savedPos,
+            reportWaitSeconds: 20,
+          };
+          setPendingChannelData(nextPendingChannelData);
+          setGameChannelData(nextPendingChannelData);
+          EventBus.emit("channel-data-ready");
+        })
+        .catch(() => {
+          // Fallback: empty map so scene doesn't hang
+          const fallback: PendingChannelData = {
+            channelId: "default",
+            mapData: null,
+            tiledJson: undefined,
+            mapConfig: { spawnCol: 5, spawnRow: 5 },
+            savedPosition: savedPos,
+            reportWaitSeconds: 20,
+          };
+          setPendingChannelData(fallback);
+          setGameChannelData(fallback);
+        });
+    }
 
     // Load NPCs and tasks
     const npcs = getNpcs();
@@ -498,6 +523,10 @@ function GamePageInner() {
     sm.on('chat:message', (data) => {
       const msg = data as ChannelChatMessage;
       setChannelMessages(prev => [...prev, msg]);
+      // Increment unread badge if chat is closed (M6)
+      if (!channelChatOpenRef.current) {
+        setUnreadChatCount(c => c + 1);
+      }
     });
 
     sm.on('player:moved', (data) => {
@@ -509,7 +538,9 @@ function GamePageInner() {
       playerId: char.id || 'unknown',
       name: char.name,
       appearance: char.appearance,
-    }).catch(console.error);
+    })
+      .then(() => setSupabaseStatus("connected"))
+      .catch(() => setSupabaseStatus("error"));
 
     // Composite player sprite
     const canvas = document.createElement("canvas");
@@ -535,6 +566,12 @@ function GamePageInner() {
     if (!showTaskBoard) return;
     refreshChannelTasks();
   }, [showTaskBoard, refreshChannelTasks]);
+
+  // Keep ref in sync with channelChatOpen for use in callbacks
+  useEffect(() => {
+    channelChatOpenRef.current = channelChatOpen;
+    if (channelChatOpen) setUnreadChatCount(0); // Clear unread when opened (M6)
+  }, [channelChatOpen]);
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -612,6 +649,7 @@ function GamePageInner() {
       resetDialog();
       setChannelChatOpen(true);
       setChannelChatInputDisabled(false);
+      setUnreadChatCount(0);
       EventBus.emit("dialog:open");
     };
 
@@ -773,6 +811,18 @@ function GamePageInner() {
     EventBus.emit("player:chat-open");
     closeRosterMenus();
   }, [closeRosterMenus]);
+
+  // H2: Teleport to another player's position
+  const handleVisitPlayer = useCallback((playerId: string) => {
+    EventBus.emit("teleport-to-player", { playerId });
+    closeRosterMenus();
+  }, [closeRosterMenus]);
+
+  // H1: Toggle map editor
+  const handleToggleMapEditor = useCallback(() => {
+    EventBus.emit("toggle-editor");
+    setEditorModeActive(prev => !prev);
+  }, []);
 
   const handleEditCharacter = useCallback(() => {
     closeRosterMenus();
@@ -1142,6 +1192,15 @@ function GamePageInner() {
   }, [closeRosterMenus]);
 
   // ESC key to close context menu
+  // Persist map edits made in the Phaser editor to localStorage
+  useEffect(() => {
+    const onMapSaved = (mapData: unknown) => {
+      saveChannel({ id: "default", name: "Office", mapData, tiledJson: null, mapConfig: null });
+    };
+    EventBus.on("map:saved", onMapSaved);
+    return () => { EventBus.off("map:saved", onMapSaved); };
+  }, []);
+
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -1224,6 +1283,20 @@ function GamePageInner() {
 
         {/* Right: grouped controls */}
         <div className="flex items-center gap-1.5">
+          {/* Supabase status indicator (H4) */}
+          {supabaseStatus === "connecting" && (
+            <span className="text-micro text-text-dim flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+              {t("game.supabaseConnecting")}
+            </span>
+          )}
+          {supabaseStatus === "error" && (
+            <span className="text-micro text-danger flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-danger" />
+              {t("game.supabaseError")}
+            </span>
+          )}
+
           {/* Roster buttons */}
           <div className="relative" data-roster-menu-root>
             <div className="flex items-center gap-1.5">
@@ -1232,9 +1305,14 @@ function GamePageInner() {
                   setRosterActionMenu(null);
                   setShowRosterMenu((prev) => prev === "players" ? null : "players");
                 }}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-caption text-text-secondary"
+                className="relative flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-caption text-text-secondary"
               >
                 <span className="w-2 h-2 rounded-full bg-sky-400" />
+                {unreadChatCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 bg-danger text-white text-micro rounded-full flex items-center justify-center px-1 font-bold">
+                    {unreadChatCount > 9 ? "9+" : unreadChatCount}
+                  </span>
+                )}
                 <span>{t("game.playersOnlineCount", { count: channelPlayers.length })}</span>
               </button>
               <button
@@ -1272,32 +1350,22 @@ function GamePageInner() {
                   {showRosterMenu === "players" ? (
                     channelPlayers.length > 0 ? channelPlayers.map((player) => (
                       player.id === "__self__" ? (
-                        <button
-                          key={player.id}
-                          onClick={(event) => openRosterActionMenu(event.currentTarget, {
-                            type: "player",
-                            playerId: player.id,
-                            playerName: player.name,
-                          })}
-                          className="w-full px-3 py-2 text-body text-text-secondary hover:bg-surface-raised flex items-center gap-2 text-left"
-                        >
+                        <div key={player.id} className="px-3 py-2 text-body text-text-secondary flex items-center gap-2">
                           <RosterAvatar appearance={player.appearance} />
                           <span className="truncate">{player.name}</span>
                           <span className="ml-auto text-micro text-text-dim">{t("game.you")}</span>
-                        </button>
+                        </div>
                       ) : (
-                        <button
-                          key={player.id}
-                          onClick={(event) => openRosterActionMenu(event.currentTarget, {
-                            type: "player",
-                            playerId: player.id,
-                            playerName: player.name,
-                          })}
-                          className="w-full px-3 py-2 text-body text-text-secondary hover:bg-surface-raised flex items-center gap-2 text-left"
-                        >
+                        <div key={player.id} className="px-3 py-2 text-body text-text-secondary hover:bg-surface-raised flex items-center gap-2">
                           <RosterAvatar appearance={player.appearance} />
-                          <span className="truncate">{player.name}</span>
-                        </button>
+                          <span className="truncate flex-1">{player.name}</span>
+                          <button
+                            onClick={() => handleVisitPlayer(player.id)}
+                            className="px-2 py-0.5 rounded text-micro bg-primary/70 hover:bg-primary text-white font-semibold shrink-0"
+                          >
+                            {t("game.visitPlayer")}
+                          </button>
+                        </div>
                       )
                     )) : (
                       <div className="px-3 py-3 text-caption text-text-dim">{t("game.noPlayersOnline")}</div>
@@ -1350,6 +1418,22 @@ function GamePageInner() {
               return <span className="bg-white/20 px-1.5 rounded-full text-micro">{n}</span>;
             })()}
           </button>
+
+          {/* Map editor toggle button (H1) */}
+          {mode === "office" && (
+            <button
+              onClick={handleToggleMapEditor}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-caption font-semibold ${
+                editorModeActive
+                  ? "bg-amber-500/80 hover:bg-amber-500 text-white"
+                  : "bg-white/5 hover:bg-white/10 border border-white/10 text-text-secondary hover:text-white"
+              }`}
+              title="TAB"
+            >
+              <Pencil className="w-3 h-3" />
+              {editorModeActive ? t("game.mapEditorActive") : t("game.mapEditor")}
+            </button>
+          )}
 
           {/* Separator */}
           <div className="w-px h-5 bg-border" />
@@ -1442,6 +1526,18 @@ function GamePageInner() {
                 <button
                   onClick={() => {
                     setShowUserMenu(false);
+                    handleEditCharacter();
+                  }}
+                  className="w-full text-left px-4 py-2 text-body text-text-secondary hover:bg-surface-raised hover:text-white flex items-center gap-2"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  {t("game.editCharacter")}
+                </button>
+
+                <div className="border-t border-border my-1" />
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
                     openBugReport();
                   }}
                   className="w-full text-left px-4 py-2 text-body text-text-secondary hover:bg-surface-raised hover:text-white flex items-center gap-2"
@@ -1480,7 +1576,7 @@ function GamePageInner() {
                   className="w-full text-left px-4 py-2 text-body text-text-secondary hover:bg-surface-raised hover:text-white flex items-center gap-2"
                 >
                   <Info className="w-3.5 h-3.5" />
-                  {t("game.aboutDeskRpg")}
+                  {t("game.aboutVieworksRpg")}
                 </button>
               </div>
             )}

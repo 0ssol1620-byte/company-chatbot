@@ -1987,6 +1987,24 @@ const ja: Record<string, string> = {
   "errors.agentInUseByNpc": "このエージェントは現在NPCが使用中です",
   "errors.failedToRemoveAgentFromGateway": "ゲートウェイからエージェントを削除できませんでした",
   "errors.templateDeleteConfirm": "「{name}」を削除しますか? この操作は元に戻せません。",
+
+  // Setup / character creation
+  "character.setupTitle": "キャラクターを作成してオフィスに入場してください",
+  "character.appearance": "外観設定",
+  "character.preview": "プレビュー",
+  "character.name": "キャラクター名",
+  "character.namePlaceholder": "名前を入力...",
+  "character.nameRequired": "名前を入力してください。",
+  "character.enterOffice": "オフィスに入場 →",
+  "character.randomize": "🎲 ランダム",
+
+  // Map editor
+  "game.mapEditor": "マップ編集",
+  "game.mapEditorActive": "編集中",
+  "game.visitPlayer": "訪問",
+  "game.supabaseConnecting": "接続中...",
+  "game.supabaseError": "接続エラー",
+  "game.unreadMessages": "未読メッセージ",
 };
 
 export default ja;
