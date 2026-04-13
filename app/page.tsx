@@ -401,9 +401,11 @@ function GamePageInner() {
 
     // Load office map then hand off to GameScene
     // Priority: 1) user-edited map in localStorage, 2) bundled static JSON
+    // MAP_VERSION bumped to 2 to bust cached Dante Labs tiles
+    const MAP_VERSION = 2;
     const savedPos = getPlayerPosition();
     const savedChannel = getChannel();
-    if (savedChannel?.mapData) {
+    if (savedChannel?.mapData && savedChannel.mapVersion === MAP_VERSION) {
       const channelData: PendingChannelData = {
         channelId: "default",
         mapData: savedChannel.mapData,
@@ -1195,7 +1197,7 @@ function GamePageInner() {
   // Persist map edits made in the Phaser editor to localStorage
   useEffect(() => {
     const onMapSaved = (mapData: unknown) => {
-      saveChannel({ id: "default", name: "Office", mapData, tiledJson: null, mapConfig: null });
+      saveChannel({ id: "default", name: "Office", mapData, tiledJson: null, mapConfig: null, mapVersion: 2 });
     };
     EventBus.on("map:saved", onMapSaved);
     return () => { EventBus.off("map:saved", onMapSaved); };

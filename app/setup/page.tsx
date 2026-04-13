@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { useT } from "@/lib/i18n";
 import CharacterPreview from "@/components/CharacterPreview";
@@ -27,6 +27,12 @@ function SetupPageInner() {
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [canGoBack, setCanGoBack] = useState(false);
+
+  // Show back button only when editing existing character (not first-time setup)
+  useEffect(() => {
+    setCanGoBack(!!getCharacter());
+  }, []);
 
   const appearance = useCharacterAppearance();
   const {
@@ -61,7 +67,16 @@ function SetupPageInner() {
     <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-start pt-8 px-4 pb-16">
       <div className="w-full max-w-4xl">
         {/* Header */}
-        <div className="text-center mb-8">
+        <div className="relative text-center mb-8">
+          {canGoBack && (
+            <button
+              onClick={() => router.replace("/")}
+              className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center gap-1 text-gray-400 hover:text-white text-sm transition-colors"
+            >
+              <span>←</span>
+              <span>{t("common.back")}</span>
+            </button>
+          )}
           <h1 className="text-2xl font-bold text-white mb-2">
             VieworksRPG
           </h1>

@@ -90,6 +90,7 @@ export interface LocalChannel {
   mapData: unknown | null;
   tiledJson: unknown | null;
   mapConfig: { cols?: number; rows?: number; spawnCol?: number; spawnRow?: number } | null;
+  mapVersion?: number;
 }
 
 // ---------------------------------------------------------------------------
