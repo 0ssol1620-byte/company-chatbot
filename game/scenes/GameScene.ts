@@ -2309,12 +2309,14 @@ export class GameScene extends Phaser.Scene {
     if (!this.gridOverlay) return;
     this.gridOverlay.clear();
 
+    const cols = this.effectiveMapCols;
+    const rows = this.effectiveMapRows;
     this.gridOverlay.lineStyle(1, 0xffffff, 0.15);
-    for (let c = 0; c <= MAP_COLS; c++) {
-      this.gridOverlay.lineBetween(c * TILE_SIZE, 0, c * TILE_SIZE, MAP_ROWS * TILE_SIZE);
+    for (let c = 0; c <= cols; c++) {
+      this.gridOverlay.lineBetween(c * TILE_SIZE, 0, c * TILE_SIZE, rows * TILE_SIZE);
     }
-    for (let r = 0; r <= MAP_ROWS; r++) {
-      this.gridOverlay.lineBetween(0, r * TILE_SIZE, MAP_COLS * TILE_SIZE, r * TILE_SIZE);
+    for (let r = 0; r <= rows; r++) {
+      this.gridOverlay.lineBetween(0, r * TILE_SIZE, cols * TILE_SIZE, r * TILE_SIZE);
     }
   }
 
