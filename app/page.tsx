@@ -15,6 +15,7 @@ import { EventBus, setPendingChannelData, type PendingChannelData } from "@/game
 import ChatPanel, { type ChannelChatMessage } from "@/components/ChatPanel";
 import MeetingRoom from "@/components/MeetingRoom";
 import NpcHireModal from "@/components/NpcHireModal";
+import MapEditorPanel, { type TilesetDef } from "@/components/MapEditorPanel";
 import type { NpcChatMessage } from "@/components/NpcDialog";
 import TaskBoard from "@/components/TaskBoard";
 import type { Task } from "@/components/TaskCard";
@@ -204,6 +205,8 @@ function GamePageInner() {
 
   // Map editor state (H1)
   const [editorModeActive, setEditorModeActive] = useState(false);
+  const [editorTilesets, setEditorTilesets] = useState<TilesetDef[] | null>(null);
+  const [editorTiledMode, setEditorTiledMode] = useState(false);
 
   // Supabase connection state (H4)
   const [supabaseStatus, setSupabaseStatus] = useState<"connecting" | "connected" | "error">("connecting");
@@ -820,10 +823,9 @@ function GamePageInner() {
     closeRosterMenus();
   }, [closeRosterMenus]);
 
-  // H1: Toggle map editor
+  // H1: Toggle map editor — state is now driven by editor:state event from GameScene
   const handleToggleMapEditor = useCallback(() => {
     EventBus.emit("toggle-editor");
-    setEditorModeActive(prev => !prev);
   }, []);
 
   const handleEditCharacter = useCallback(() => {
@@ -1197,10 +1199,25 @@ function GamePageInner() {
   // Persist map edits made in the Phaser editor to localStorage
   useEffect(() => {
     const onMapSaved = (mapData: unknown) => {
-      saveChannel({ id: "default", name: "Office", mapData, tiledJson: null, mapConfig: null, mapVersion: 2 });
+      // GameScene emits { tiledJson } when in tiledMode, or { layers, objects } in legacy mode.
+      // We wrap it as { tiledJson } so reloading can extract tiledJson from mapData.tiledJson.
+      const data = mapData as Record<string, unknown>;
+      const toSave = data?.tiledJson ? { tiledJson: data.tiledJson } : mapData;
+      saveChannel({ id: "default", name: "Office", mapData: toSave, tiledJson: null, mapConfig: null, mapVersion: 2 });
     };
     EventBus.on("map:saved", onMapSaved);
     return () => { EventBus.off("map:saved", onMapSaved); };
+  }, []);
+
+  // Listen for editor state changes (tileset info for tile picker panel)
+  useEffect(() => {
+    const onEditorState = (state: { active: boolean; tilesets: TilesetDef[] | null; tiledMode: boolean }) => {
+      setEditorModeActive(state.active);
+      setEditorTilesets(state.tilesets);
+      setEditorTiledMode(state.tiledMode);
+    };
+    EventBus.on("editor:state", onEditorState);
+    return () => { EventBus.off("editor:state", onEditorState); };
   }, []);
 
   useEffect(() => {
@@ -1261,6 +1278,14 @@ function GamePageInner() {
           />
         )}
       </div>
+
+      {/* Map Editor tile picker panel */}
+      {editorModeActive && (
+        <MapEditorPanel
+          tilesets={editorTilesets as TilesetDef[] | null}
+          tiledMode={editorTiledMode}
+        />
+      )}
 
       {/* Spawn set mode banner */}
       {spawnSetMode && (

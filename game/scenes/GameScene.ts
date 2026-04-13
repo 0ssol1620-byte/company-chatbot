@@ -860,9 +860,14 @@ export class GameScene extends Phaser.Scene {
   private channelId: string = "";
   private channelMapData: MapData | null = null;
   private tiledMode: boolean = false; // true when using Tiled JSON map (not legacy tilemap)
+  private tiledJsonData: Record<string, unknown> | null = null; // live copy of Tiled JSON for save
   private tiledSpawnCol: number | null = null;
   private tiledSpawnRow: number | null = null;
   private savedPosition: { x: number; y: number } | null = null;
+
+  // Editor stamp state (for tile painting on Tiled layers)
+  private selectedStampGid = 0; // 0 = none, -1 = erase
+  private selectedStampLayer: "floor" | "walls" | "foreground" = "floor";
 
   // Player name label
   private playerNameLabel: Phaser.GameObjects.Text | null = null;
@@ -1237,6 +1242,15 @@ export class GameScene extends Phaser.Scene {
 
     // Map editor toggle from toolbar
     EventBus.on("toggle-editor", () => this.toggleEditor());
+
+    // React tile picker → GameScene stamp selection
+    EventBus.on("editor:select-stamp", (data: { gid: number; layer: string }) => {
+      this.selectedStampGid = data.gid;
+      this.selectedStampLayer = (data.layer || "floor") as "floor" | "walls" | "foreground";
+      this.editorObjectMode = false; // switch away from object placement
+      if (this.editorObjectPreview) { this.editorObjectPreview.destroy(); this.editorObjectPreview = null; }
+      this.updateLayerText();
+    });
 
     // Teleport to another player's position
     EventBus.on("teleport-to-player", (data: { playerId: string }) => {
@@ -1699,6 +1713,8 @@ export class GameScene extends Phaser.Scene {
 
   private loadTiledMap(tiledJson: Record<string, unknown>): void {
     this.tiledMode = true;
+    // Store a live deep-clone so edits can be persisted on save
+    this.tiledJsonData = JSON.parse(JSON.stringify(tiledJson));
     // Resolve external tileset references — Phaser doesn't support them
     const tilesetArr = tiledJson.tilesets as Array<Record<string, unknown>>;
     if (tilesetArr) {
@@ -2154,8 +2170,19 @@ export class GameScene extends Phaser.Scene {
 
     if (this.editorMode) {
       this.showEditor();
+      // Notify React: send tileset info for the tile picker panel
+      if (this.tiledJsonData) {
+        EventBus.emit("editor:state", {
+          active: true,
+          tilesets: this.tiledJsonData.tilesets ?? [],
+          tiledMode: true,
+        });
+      } else {
+        EventBus.emit("editor:state", { active: true, tilesets: null, tiledMode: false });
+      }
     } else {
       this.hideEditor();
+      EventBus.emit("editor:state", { active: false, tilesets: null, tiledMode: false });
     }
   }
 
@@ -2501,6 +2528,9 @@ export class GameScene extends Phaser.Scene {
       const indexLabel = typeIndex >= 0 ? ` (${typeIndex + 1})` : "";
       const dirArrow = { up: "↑", down: "↓", left: "←", right: "→" }[this.selectedObjectDirection] ?? "";
       this.editorLayerText.setText(`오브젝트: ${this.selectedObjectType} ${dirArrow} | 클릭: 배치 | 우클릭: 삭제 | ESC: 종료`);
+    } else if (this.tiledMode) {
+      const gidLabel = this.selectedStampGid > 0 ? `GID:${this.selectedStampGid}` : "없음";
+      this.editorLayerText.setText(`타일: ${gidLabel} [${this.selectedStampLayer}] | 패널에서 타일 선택 | 우클릭: 지우기 | ESC: 종료`);
     } else {
       const layerNames = ["Floor (1)", "Walls (2)"];
       this.editorLayerText.setText(`Layer: ${layerNames[this.selectedLayer] ?? "Unknown"} | Tile: ${TILE_NAMES[this.selectedTile]} | O: object mode`);
@@ -2508,12 +2538,47 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleEditorClick(pointer: Phaser.Input.Pointer): void {
-    if (this.tiledMode) return; // Legacy tile editor not supported for Tiled JSON maps
     const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
     const tileX = Math.floor(worldPoint.x / TILE_SIZE);
     const tileY = Math.floor(worldPoint.y / TILE_SIZE);
 
-    if (tileX < 0 || tileX >= MAP_COLS || tileY < 0 || tileY >= MAP_ROWS) return;
+    if (tileX < 0 || tileX >= this.effectiveMapCols || tileY < 0 || tileY >= this.effectiveMapRows) return;
+
+    // Tiled JSON maps: paint stamp tiles
+    if (this.tiledMode) {
+      const erasing = pointer.rightButtonDown() || this.selectedStampGid === -1;
+      const targetGid = erasing ? 0 : this.selectedStampGid;
+      if (!erasing && targetGid === 0) return; // no stamp selected and not erasing
+
+      const layer = this.selectedStampLayer === "walls" ? this.wallsLayer : this.floorLayer;
+      if (!layer) return;
+
+      // Place or erase tile on the Phaser layer
+      if (targetGid === 0) {
+        layer.removeTileAt(tileX, tileY);
+      } else {
+        layer.putTileAt(targetGid, tileX, tileY);
+      }
+
+      // Update our live tiledJsonData layer array for saving
+      if (this.tiledJsonData) {
+        const layerName = this.selectedStampLayer === "walls" ? "Walls" : "Floor";
+        const layers = this.tiledJsonData.layers as Array<Record<string, unknown>> | undefined;
+        const layerData = layers?.find(l =>
+          typeof l.name === "string" && l.name.toLowerCase() === layerName.toLowerCase() && l.type === "tilelayer"
+        );
+        if (layerData) {
+          const dataArr = layerData.data as number[];
+          const mapWidth = (this.tiledJsonData.width as number) || this.effectiveMapCols;
+          if (dataArr && tileY * mapWidth + tileX < dataArr.length) {
+            dataArr[tileY * mapWidth + tileX] = targetGid;
+          }
+        }
+      }
+      return;
+    }
+
+    // Legacy tile editor (non-Tiled mode)
 
     // Right-click: erase (set to empty or floor depending on layer)
     let layerName: string;
@@ -2550,16 +2615,21 @@ export class GameScene extends Phaser.Scene {
   }
 
   private saveMap(): void {
-    const mapData: MapData = {
-      layers: {
-        floor: this.floorData,
-        walls: this.wallsData,
-      },
-      objects: this.mapObjects,
-    };
-
-    // Persist via EventBus → page.tsx saves to localStorage (local-store)
-    EventBus.emit("map:saved", mapData);
+    if (this.tiledMode && this.tiledJsonData) {
+      // Sync mapObjects into the tiledJson objects layer so they survive reload
+      this.syncObjectsToTiledJson();
+      // Emit wrapper: { tiledJson } → page.tsx wraps as { tiledJson } in mapData
+      EventBus.emit("map:saved", { tiledJson: this.tiledJsonData });
+    } else {
+      const mapData: MapData = {
+        layers: {
+          floor: this.floorData,
+          walls: this.wallsData,
+        },
+        objects: this.mapObjects,
+      };
+      EventBus.emit("map:saved", mapData);
+    }
 
     // Flash the save button green
     const saveBtn = this.children.getByName("editor-save-btn") as Phaser.GameObjects.Text | null;
@@ -2569,6 +2639,35 @@ export class GameScene extends Phaser.Scene {
         if (saveBtn.active) saveBtn.setText("[ SAVE MAP ]");
       });
     }
+  }
+
+  /** Sync this.mapObjects back into the tiledJsonData objects layer so saves preserve them */
+  private syncObjectsToTiledJson(): void {
+    if (!this.tiledJsonData) return;
+    const layers = this.tiledJsonData.layers as Array<Record<string, unknown>>;
+    if (!layers) return;
+
+    // Find or create an Objects layer
+    let objLayer = layers.find(
+      l => l.type === "objectgroup" && typeof l.name === "string" && l.name.toLowerCase() === "objects"
+    );
+    if (!objLayer) {
+      objLayer = { id: 9999, name: "Objects", type: "objectgroup", objects: [], visible: true, opacity: 1, x: 0, y: 0 };
+      layers.push(objLayer);
+    }
+
+    // Rebuild objects array from mapObjects
+    objLayer.objects = this.mapObjects.map((obj) => ({
+      id: parseInt(obj.id.replace(/\D/g, "").substring(0, 8)) || Math.floor(Math.random() * 100000),
+      name: obj.id,
+      type: obj.type,
+      x: obj.col * TILE_SIZE,
+      y: obj.row * TILE_SIZE,
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+      visible: true,
+      properties: obj.direction ? [{ name: "direction", type: "string", value: obj.direction }] : [],
+    }));
   }
 
   // ---------------------------------------------------------------------------
@@ -2800,8 +2899,10 @@ export class GameScene extends Phaser.Scene {
     img.src = dataUrl;
   }
 
-  /** Check if a tile is occupied by an NPC, remote player, or known NPC position */
+  /** Check if a tile is occupied by an NPC, remote player, known NPC position, or map object */
   private isTileOccupied(col: number, row: number): boolean {
+    // Check object occupied tiles (desks, chairs, etc.)
+    if (this.objectOccupiedTiles.has(`${col},${row}`)) return true;
     // Check pre-recorded NPC positions (available before sprites load)
     if (this.npcTilePositions.has(`${col},${row}`)) return true;
 
