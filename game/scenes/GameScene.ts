@@ -809,6 +809,7 @@ export class GameScene extends Phaser.Scene {
   private editorKeys: { one?: Phaser.Input.Keyboard.Key; two?: Phaser.Input.Keyboard.Key; three?: Phaser.Input.Keyboard.Key; oKey?: Phaser.Input.Keyboard.Key } = {};
   private editorObjectMode = false;
   private selectedObjectType: string = "desk";
+  private selectedObjectDirection: "down" | "left" | "right" | "up" = "up";
   private editorObjectPreview: Phaser.GameObjects.Sprite | null = null;
 
   // Minimap
@@ -1399,7 +1400,8 @@ export class GameScene extends Phaser.Scene {
           if (tileX >= 0 && tileX < MAP_COLS && tileY >= 0 && tileY < MAP_ROWS) {
             const def = OBJECT_TYPES[this.selectedObjectType];
             if (def) {
-              const texKey = `obj-${this.selectedObjectType}`;
+              const dirKey = `obj-${this.selectedObjectType}-${this.selectedObjectDirection}`;
+              const texKey = this.textures.exists(dirKey) ? dirKey : `obj-${this.selectedObjectType}`;
               if (!this.editorObjectPreview) {
                 this.editorObjectPreview = this.add.sprite(0, 0, texKey);
                 this.editorObjectPreview.setOrigin(0.5, 1);
@@ -1409,14 +1411,13 @@ export class GameScene extends Phaser.Scene {
                 this.editorObjectPreview.setTexture(texKey);
               }
 
-              const w = def.width || 1;
-              const h = def.height || 1;
+              const { width: w, height: h } = getObjectDimensions(this.selectedObjectType, this.selectedObjectDirection);
               const x = (tileX + w / 2) * TILE_SIZE;
               const y = (tileY + h) * TILE_SIZE;
               this.editorObjectPreview.setPosition(x, y);
               this.editorObjectPreview.setVisible(true);
 
-              const valid = canPlaceObject(this.selectedObjectType, tileX, tileY, this.mapObjects, this.wallsData);
+              const valid = canPlaceObject(this.selectedObjectType, tileX, tileY, this.mapObjects, this.wallsData, this.selectedObjectDirection);
               this.editorObjectPreview.setTint(valid ? 0x44ff44 : 0xff4444);
             }
           } else {
@@ -1515,12 +1516,13 @@ export class GameScene extends Phaser.Scene {
             }
           } else {
             // Left-click: place object
-            if (canPlaceObject(this.selectedObjectType, tileX, tileY, this.mapObjects, this.wallsData)) {
+            if (canPlaceObject(this.selectedObjectType, tileX, tileY, this.mapObjects, this.wallsData, this.selectedObjectDirection)) {
               const obj: MapObject = {
                 id: generateObjectId(),
                 type: this.selectedObjectType,
                 col: tileX,
                 row: tileY,
+                direction: this.selectedObjectDirection,
               };
               this.mapObjects.push(obj);
               this.renderObjects();
@@ -2183,6 +2185,11 @@ export class GameScene extends Phaser.Scene {
     }
     this.editorToolbar.setVisible(true);
 
+    // In Tiled mode, always use object editor (tile editor is disabled)
+    if (this.tiledMode) {
+      this.editorObjectMode = true;
+    }
+
     // Layer indicator
     if (!this.editorLayerText) {
       this.editorLayerText = this.add.text(10, 10, "", {
@@ -2280,6 +2287,16 @@ export class GameScene extends Phaser.Scene {
   private buildToolbar(): void {
     if (!this.editorToolbar) return;
 
+    if (this.tiledMode) {
+      this.buildObjectToolbar();
+    } else {
+      this.buildTileToolbar();
+    }
+  }
+
+  private buildTileToolbar(): void {
+    if (!this.editorToolbar) return;
+
     const cam = this.cameras.main;
     const tileCount = 16;
     const btnSize = 28;
@@ -2288,46 +2305,149 @@ export class GameScene extends Phaser.Scene {
     const startX = (cam.width / cam.zoom - totalWidth) / 2;
     const y = cam.height / cam.zoom - btnSize - 12;
 
-    // Background bar
     const bg = this.add.graphics();
     bg.fillStyle(0x000000, 0.7);
     bg.fillRoundedRect(startX - 8, y - 8, totalWidth + 16, btnSize + 30, 6);
     this.editorToolbar.add(bg);
 
-    // Selected tile highlight
     this.editorSelectedHighlight = this.add.graphics();
     this.editorToolbar.add(this.editorSelectedHighlight);
 
     for (let i = 0; i < tileCount; i++) {
       const bx = startX + i * (btnSize + gap);
-
-      // Tile preview (small copy from the texture)
       const tileImg = this.add.image(bx + btnSize / 2, y + btnSize / 2, "office-tiles");
       tileImg.setCrop(i * TILE_SIZE, 0, TILE_SIZE, TILE_SIZE);
       tileImg.setDisplaySize(btnSize, btnSize);
       tileImg.setOrigin(0.5, 0.5);
       this.editorToolbar.add(tileImg);
 
-      // Label
       const label = this.add.text(bx + btnSize / 2, y + btnSize + 2, `${i}`, {
-        fontSize: "7px",
-        color: "#aaaaaa",
-        align: "center",
+        fontSize: "7px", color: "#aaaaaa", align: "center",
       });
       label.setOrigin(0.5, 0);
       this.editorToolbar.add(label);
 
-      // Invisible interactive zone
+      const zone = this.add.zone(bx + btnSize / 2, y + btnSize / 2, btnSize, btnSize);
+      zone.setInteractive({ useHandCursor: true });
+      zone.on("pointerdown", () => { this.selectedTile = i; this.updateToolbarHighlight(); });
+      this.editorToolbar.add(zone);
+    }
+    this.updateToolbarHighlight();
+  }
+
+  /** Object toolbar for Tiled JSON maps: shows all OBJECT_TYPE_LIST items + direction picker */
+  private buildObjectToolbar(): void {
+    if (!this.editorToolbar) return;
+
+    const cam = this.cameras.main;
+    const btnSize = 32;
+    const gap = 6;
+    const objCount = OBJECT_TYPE_LIST.length;
+    const dirBtns = [
+      { id: "up" as const, label: "↑" },
+      { id: "down" as const, label: "↓" },
+      { id: "left" as const, label: "←" },
+      { id: "right" as const, label: "→" },
+    ];
+    const dirSectionW = dirBtns.length * (22 + 4) + 10;
+    const totalWidth = objCount * (btnSize + gap) + dirSectionW;
+    const startX = Math.max(8, (cam.width / cam.zoom - totalWidth) / 2);
+    const y = cam.height / cam.zoom - btnSize - 18;
+
+    // Background
+    const bg = this.add.graphics();
+    bg.fillStyle(0x000000, 0.8);
+    bg.fillRoundedRect(startX - 8, y - 8, totalWidth + 16, btnSize + 34, 8);
+    this.editorToolbar.add(bg);
+
+    // Object type buttons
+    this.editorSelectedHighlight = this.add.graphics();
+    this.editorToolbar.add(this.editorSelectedHighlight);
+
+    for (let i = 0; i < OBJECT_TYPE_LIST.length; i++) {
+      const obj = OBJECT_TYPE_LIST[i];
+      const bx = startX + i * (btnSize + gap);
+      const texKey = `obj-${obj.id}-down`;
+
+      if (this.textures.exists(texKey)) {
+        const img = this.add.image(bx + btnSize / 2, y + btnSize / 2, texKey);
+        img.setDisplaySize(btnSize, btnSize);
+        img.setOrigin(0.5, 0.5);
+        this.editorToolbar.add(img);
+      }
+
+      const label = this.add.text(bx + btnSize / 2, y + btnSize + 2, obj.name.substring(0, 5), {
+        fontSize: "7px", color: "#cccccc", align: "center",
+      });
+      label.setOrigin(0.5, 0);
+      this.editorToolbar.add(label);
+
       const zone = this.add.zone(bx + btnSize / 2, y + btnSize / 2, btnSize, btnSize);
       zone.setInteractive({ useHandCursor: true });
       zone.on("pointerdown", () => {
-        this.selectedTile = i;
-        this.updateToolbarHighlight();
+        this.selectedObjectType = obj.id;
+        if (this.editorObjectPreview) { this.editorObjectPreview.destroy(); this.editorObjectPreview = null; }
+        this.updateObjectToolbarHighlight();
+        this.updateLayerText();
       });
       this.editorToolbar.add(zone);
     }
 
-    this.updateToolbarHighlight();
+    // Direction buttons
+    const dirStartX = startX + objCount * (btnSize + gap) + 10;
+    const dirLabel = this.add.text(dirStartX, y - 4, "방향", {
+      fontSize: "8px", color: "#888888",
+    });
+    dirLabel.setOrigin(0, 1);
+    this.editorToolbar.add(dirLabel);
+
+    for (let i = 0; i < dirBtns.length; i++) {
+      const d = dirBtns[i];
+      const dx = dirStartX + i * 26;
+      const btn = this.add.text(dx, y + btnSize / 2, d.label, {
+        fontSize: "14px",
+        color: this.selectedObjectDirection === d.id ? "#00ff88" : "#888888",
+        backgroundColor: "#333333",
+        padding: { x: 4, y: 2 },
+      });
+      btn.setOrigin(0, 0.5);
+      btn.setInteractive({ useHandCursor: true });
+      btn.setName(`dir-btn-${d.id}`);
+      btn.on("pointerdown", () => {
+        this.selectedObjectDirection = d.id;
+        // Refresh all direction button colors
+        for (const dd of dirBtns) {
+          const b = this.editorToolbar?.getByName(`dir-btn-${dd.id}`) as Phaser.GameObjects.Text | null;
+          if (b) b.setColor(this.selectedObjectDirection === dd.id ? "#00ff88" : "#888888");
+        }
+        if (this.editorObjectPreview) { this.editorObjectPreview.destroy(); this.editorObjectPreview = null; }
+        this.updateLayerText();
+      });
+      this.editorToolbar.add(btn);
+    }
+
+    this.updateObjectToolbarHighlight();
+  }
+
+  private updateObjectToolbarHighlight(): void {
+    if (!this.editorSelectedHighlight || !this.editorToolbar || !this.tiledMode) return;
+
+    const cam = this.cameras.main;
+    const btnSize = 32;
+    const gap = 6;
+    const objCount = OBJECT_TYPE_LIST.length;
+    const dirSectionW = 4 * (22 + 4) + 10;
+    const totalWidth = objCount * (btnSize + gap) + dirSectionW;
+    const startX = Math.max(8, (cam.width / cam.zoom - totalWidth) / 2);
+    const y = cam.height / cam.zoom - btnSize - 18;
+
+    const idx = OBJECT_TYPE_LIST.findIndex(t => t.id === this.selectedObjectType);
+    if (idx < 0) return;
+    const bx = startX + idx * (btnSize + gap);
+
+    this.editorSelectedHighlight.clear();
+    this.editorSelectedHighlight.lineStyle(2, 0x00ff88, 1);
+    this.editorSelectedHighlight.strokeRect(bx - 1, y - 1, btnSize + 2, btnSize + 2);
   }
 
   private updateToolbarHighlight(): void {
@@ -2353,7 +2473,8 @@ export class GameScene extends Phaser.Scene {
     if (this.editorObjectMode) {
       const typeIndex = OBJECT_TYPE_LIST.findIndex((t) => t.id === this.selectedObjectType);
       const indexLabel = typeIndex >= 0 ? ` (${typeIndex + 1})` : "";
-      this.editorLayerText.setText(`Object Mode: ${this.selectedObjectType}${indexLabel} | O: toggle mode`);
+      const dirArrow = { up: "↑", down: "↓", left: "←", right: "→" }[this.selectedObjectDirection] ?? "";
+      this.editorLayerText.setText(`오브젝트: ${this.selectedObjectType} ${dirArrow} | 클릭: 배치 | 우클릭: 삭제 | ESC: 종료`);
     } else {
       const layerNames = ["Floor (1)", "Walls (2)"];
       this.editorLayerText.setText(`Layer: ${layerNames[this.selectedLayer] ?? "Unknown"} | Tile: ${TILE_NAMES[this.selectedTile]} | O: object mode`);

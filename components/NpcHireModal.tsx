@@ -126,7 +126,7 @@ export default function NpcHireModal({
   const [aiFiles, setAiFiles] = useState<LocalAgentFile[]>([]);
 
   // Direction
-  const [direction, setDirection] = useState("down");
+  const [direction, setDirection] = useState("up"); // "up" = faces desk/monitor (typical desk setup)
 
   // Presets
   const [presets, setPresets] = useState<NpcPreset[]>([]);
@@ -184,7 +184,7 @@ export default function NpcHireModal({
         setIdentity(editingNpc.persona || "");
         setSoul("");
         setShowAdvanced(false);
-        setDirection(editingNpc.direction || "down");
+        setDirection(editingNpc.direction || "up");
         const app = editingNpc.appearance as CharacterAppearance | null;
         if (app && app.bodyType && app.layers) {
           setBodyType(app.bodyType);
