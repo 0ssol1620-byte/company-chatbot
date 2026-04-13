@@ -2180,6 +2180,8 @@ export class GameScene extends Phaser.Scene {
       this.editorToolbar = this.add.container(0, 0);
       this.editorToolbar.setDepth(20020);
       this.editorToolbar.setScrollFactor(0);
+      // Counter-act camera zoom so children use screen-pixel coordinates
+      this.editorToolbar.setScale(1 / cam.zoom);
 
       this.buildToolbar();
     }
@@ -2188,6 +2190,7 @@ export class GameScene extends Phaser.Scene {
     // In Tiled mode, always use object editor (tile editor is disabled)
     if (this.tiledMode) {
       this.editorObjectMode = true;
+      this.updateObjectToolbarHighlight(); // refresh highlight on re-open
     }
 
     // Layer indicator
@@ -2297,13 +2300,14 @@ export class GameScene extends Phaser.Scene {
   private buildTileToolbar(): void {
     if (!this.editorToolbar) return;
 
+    // Screen-pixel coords (container scale = 1/zoom)
     const cam = this.cameras.main;
     const tileCount = 16;
     const btnSize = 28;
     const gap = 4;
     const totalWidth = tileCount * (btnSize + gap);
-    const startX = (cam.width / cam.zoom - totalWidth) / 2;
-    const y = cam.height / cam.zoom - btnSize - 12;
+    const startX = (cam.width - totalWidth) / 2;
+    const y = cam.height - btnSize - 12;
 
     const bg = this.add.graphics();
     bg.fillStyle(0x000000, 0.7);
@@ -2335,54 +2339,70 @@ export class GameScene extends Phaser.Scene {
     this.updateToolbarHighlight();
   }
 
-  /** Object toolbar for Tiled JSON maps: shows all OBJECT_TYPE_LIST items + direction picker */
+  /** Object toolbar for Tiled JSON maps — uses screen-pixel coords (container is scaled 1/zoom) */
   private buildObjectToolbar(): void {
     if (!this.editorToolbar) return;
 
+    // Since editorToolbar has setScale(1/cam.zoom), positions here are screen pixels
     const cam = this.cameras.main;
-    const btnSize = 32;
-    const gap = 6;
-    const objCount = OBJECT_TYPE_LIST.length;
+    const W = cam.width;   // screen pixels
+    const H = cam.height;
+    const BTN = 36;        // button size in screen pixels
+    const GAP = 5;
+    const LABEL_H = 12;
+    const BAR_H = BTN + LABEL_H + 16;
+
     const dirBtns = [
       { id: "up" as const, label: "↑" },
       { id: "down" as const, label: "↓" },
       { id: "left" as const, label: "←" },
       { id: "right" as const, label: "→" },
     ];
-    const dirSectionW = dirBtns.length * (22 + 4) + 10;
-    const totalWidth = objCount * (btnSize + gap) + dirSectionW;
-    const startX = Math.max(8, (cam.width / cam.zoom - totalWidth) / 2);
-    const y = cam.height / cam.zoom - btnSize - 18;
+    const DIR_W = dirBtns.length * (28 + 4) + 20; // direction section width
+    const OBJ_W = OBJECT_TYPE_LIST.length * (BTN + GAP);
+    const totalW = OBJ_W + DIR_W;
+
+    const startX = Math.max(8, (W - totalW) / 2);
+    const y = H - BAR_H + 8; // button top y
 
     // Background
     const bg = this.add.graphics();
-    bg.fillStyle(0x000000, 0.8);
-    bg.fillRoundedRect(startX - 8, y - 8, totalWidth + 16, btnSize + 34, 8);
+    bg.fillStyle(0x111111, 0.9);
+    bg.fillRoundedRect(startX - 10, H - BAR_H, totalW + 20, BAR_H, 6);
+    bg.lineStyle(1, 0x444444, 0.8);
+    bg.strokeRoundedRect(startX - 10, H - BAR_H, totalW + 20, BAR_H, 6);
     this.editorToolbar.add(bg);
 
-    // Object type buttons
+    // Highlight graphics (drawn on top)
     this.editorSelectedHighlight = this.add.graphics();
     this.editorToolbar.add(this.editorSelectedHighlight);
 
+    // Object buttons
     for (let i = 0; i < OBJECT_TYPE_LIST.length; i++) {
       const obj = OBJECT_TYPE_LIST[i];
-      const bx = startX + i * (btnSize + gap);
+      const bx = startX + i * (BTN + GAP);
       const texKey = `obj-${obj.id}-down`;
 
       if (this.textures.exists(texKey)) {
-        const img = this.add.image(bx + btnSize / 2, y + btnSize / 2, texKey);
-        img.setDisplaySize(btnSize, btnSize);
+        const img = this.add.image(bx + BTN / 2, y + BTN / 2, texKey);
+        img.setDisplaySize(BTN - 4, BTN - 4);
         img.setOrigin(0.5, 0.5);
         this.editorToolbar.add(img);
+      } else {
+        // Fallback placeholder
+        const ph = this.add.graphics();
+        ph.fillStyle(0x444466);
+        ph.fillRect(bx + 2, y + 2, BTN - 4, BTN - 4);
+        this.editorToolbar.add(ph);
       }
 
-      const label = this.add.text(bx + btnSize / 2, y + btnSize + 2, obj.name.substring(0, 5), {
-        fontSize: "7px", color: "#cccccc", align: "center",
+      const label = this.add.text(bx + BTN / 2, y + BTN + 2, obj.name.split(" ")[0].substring(0, 6), {
+        fontSize: "9px", color: "#aaaaaa", align: "center",
       });
       label.setOrigin(0.5, 0);
       this.editorToolbar.add(label);
 
-      const zone = this.add.zone(bx + btnSize / 2, y + btnSize / 2, btnSize, btnSize);
+      const zone = this.add.zone(bx + BTN / 2, y + BTN / 2, BTN, BTN);
       zone.setInteractive({ useHandCursor: true });
       zone.on("pointerdown", () => {
         this.selectedObjectType = obj.id;
@@ -2393,32 +2413,33 @@ export class GameScene extends Phaser.Scene {
       this.editorToolbar.add(zone);
     }
 
-    // Direction buttons
-    const dirStartX = startX + objCount * (btnSize + gap) + 10;
-    const dirLabel = this.add.text(dirStartX, y - 4, "방향", {
-      fontSize: "8px", color: "#888888",
+    // Direction section
+    const dirX = startX + OBJ_W + 12;
+    const dirLabelTxt = this.add.text(dirX, y - 2, "방향", {
+      fontSize: "9px", color: "#888888",
     });
-    dirLabel.setOrigin(0, 1);
-    this.editorToolbar.add(dirLabel);
+    this.editorToolbar.add(dirLabelTxt);
 
     for (let i = 0; i < dirBtns.length; i++) {
       const d = dirBtns[i];
-      const dx = dirStartX + i * 26;
-      const btn = this.add.text(dx, y + btnSize / 2, d.label, {
-        fontSize: "14px",
-        color: this.selectedObjectDirection === d.id ? "#00ff88" : "#888888",
-        backgroundColor: "#333333",
-        padding: { x: 4, y: 2 },
+      const dx = dirX + i * 32;
+      const btn = this.add.text(dx + 14, y + BTN / 2, d.label, {
+        fontSize: "16px",
+        color: this.selectedObjectDirection === d.id ? "#00ff88" : "#666666",
+        backgroundColor: this.selectedObjectDirection === d.id ? "#224422" : "#222222",
+        padding: { x: 5, y: 3 },
       });
-      btn.setOrigin(0, 0.5);
+      btn.setOrigin(0.5, 0.5);
       btn.setInteractive({ useHandCursor: true });
       btn.setName(`dir-btn-${d.id}`);
       btn.on("pointerdown", () => {
         this.selectedObjectDirection = d.id;
-        // Refresh all direction button colors
         for (const dd of dirBtns) {
           const b = this.editorToolbar?.getByName(`dir-btn-${dd.id}`) as Phaser.GameObjects.Text | null;
-          if (b) b.setColor(this.selectedObjectDirection === dd.id ? "#00ff88" : "#888888");
+          if (b) {
+            b.setColor(this.selectedObjectDirection === dd.id ? "#00ff88" : "#666666");
+            b.setBackgroundColor(this.selectedObjectDirection === dd.id ? "#224422" : "#222222");
+          }
         }
         if (this.editorObjectPreview) { this.editorObjectPreview.destroy(); this.editorObjectPreview = null; }
         this.updateLayerText();
@@ -2433,33 +2454,38 @@ export class GameScene extends Phaser.Scene {
     if (!this.editorSelectedHighlight || !this.editorToolbar || !this.tiledMode) return;
 
     const cam = this.cameras.main;
-    const btnSize = 32;
-    const gap = 6;
-    const objCount = OBJECT_TYPE_LIST.length;
-    const dirSectionW = 4 * (22 + 4) + 10;
-    const totalWidth = objCount * (btnSize + gap) + dirSectionW;
-    const startX = Math.max(8, (cam.width / cam.zoom - totalWidth) / 2);
-    const y = cam.height / cam.zoom - btnSize - 18;
+    const W = cam.width;
+    const H = cam.height;
+    const BTN = 36;
+    const GAP = 5;
+    const LABEL_H = 12;
+    const BAR_H = BTN + LABEL_H + 16;
+    const DIR_W = 4 * (28 + 4) + 20;
+    const OBJ_W = OBJECT_TYPE_LIST.length * (BTN + GAP);
+    const totalW = OBJ_W + DIR_W;
+    const startX = Math.max(8, (W - totalW) / 2);
+    const y = H - BAR_H + 8;
 
     const idx = OBJECT_TYPE_LIST.findIndex(t => t.id === this.selectedObjectType);
     if (idx < 0) return;
-    const bx = startX + idx * (btnSize + gap);
+    const bx = startX + idx * (BTN + GAP);
 
     this.editorSelectedHighlight.clear();
     this.editorSelectedHighlight.lineStyle(2, 0x00ff88, 1);
-    this.editorSelectedHighlight.strokeRect(bx - 1, y - 1, btnSize + 2, btnSize + 2);
+    this.editorSelectedHighlight.strokeRect(bx, y, BTN, BTN);
   }
 
   private updateToolbarHighlight(): void {
     if (!this.editorSelectedHighlight || !this.editorToolbar) return;
 
+    // Tile toolbar also uses screen-pixel coords (container scale = 1/zoom)
     const cam = this.cameras.main;
     const tileCount = 16;
     const btnSize = 28;
     const gap = 4;
     const totalWidth = tileCount * (btnSize + gap);
-    const startX = (cam.width / cam.zoom - totalWidth) / 2;
-    const y = cam.height / cam.zoom - btnSize - 12;
+    const startX = (cam.width - totalWidth) / 2;
+    const y = cam.height - btnSize - 12;
 
     const bx = startX + this.selectedTile * (btnSize + gap);
 
