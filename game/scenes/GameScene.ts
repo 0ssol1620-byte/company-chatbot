@@ -869,6 +869,10 @@ export class GameScene extends Phaser.Scene {
   private selectedStampGid = 0; // 0 = none, -1 = erase
   private selectedStampLayer: "floor" | "walls" | "foreground" = "floor";
 
+  // Sitting mechanic
+  private isSitting = false;
+  private sittingChair: MapObject | null = null; // the chair the player is sitting on
+
   // Player name label
   private playerNameLabel: Phaser.GameObjects.Text | null = null;
 
@@ -2641,6 +2645,54 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** Find a chair object at or adjacent to the given tile position */
+  private findChairAt(col: number, row: number): MapObject | null {
+    for (const obj of this.mapObjects) {
+      if (obj.type !== "chair") continue;
+      // Check if player tile overlaps this chair's footprint
+      if (obj.col === col && obj.row === row) return obj;
+      // Also check adjacent tiles (player stands in front of chair)
+      const adjCol = obj.col + (obj.direction === "left" ? 1 : obj.direction === "right" ? -1 : 0);
+      const adjRow = obj.row + (obj.direction === "up" ? 1 : obj.direction === "down" ? -1 : 0);
+      if (adjCol === col && adjRow === row) return obj;
+    }
+    return null;
+  }
+
+  /** Make the player sit on a chair (visual approximation: face up + Y offset) */
+  private sitOnChair(chair: MapObject): void {
+    if (!this.player || this.isSitting) return;
+    this.isSitting = true;
+    this.sittingChair = chair;
+
+    // Face up (toward desk, matching NPC sitting direction)
+    this.currentDirection = DIR_UP;
+    this.player.setFrame(DIR_UP * SPRITE_COLS);
+    this.player.anims.stop();
+
+    // Move player to the chair tile center
+    const chairX = chair.col * TILE_SIZE + TILE_SIZE / 2;
+    const chairY = chair.row * TILE_SIZE + TILE_SIZE / 2;
+    this.player.setPosition(chairX, chairY);
+    const sBody = this.player.body as Phaser.Physics.Arcade.Body | null;
+    sBody?.setVelocity(0, 0);
+
+    // Scale down slightly and shift up to approximate sitting pose
+    this.player.setScale(0.85);
+    this.player.y -= 8;
+
+    EventBus.emit("toast:show", { message: "앉는 중 — 방향키 또는 클릭으로 일어나기" });
+  }
+
+  /** Stand up from the current chair */
+  private standUp(): void {
+    if (!this.isSitting || !this.player) return;
+    this.isSitting = false;
+    this.sittingChair = null;
+    this.player.setScale(1);
+    EventBus.emit("toast:hide");
+  }
+
   /** Sync this.mapObjects back into the tiledJsonData objects layer so saves preserve them */
   private syncObjectsToTiledJson(): void {
     if (!this.tiledJsonData) return;
@@ -3526,6 +3578,21 @@ export class GameScene extends Phaser.Scene {
     const down = this.cursors?.down.isDown;
     const hasKeyboardInput = left || right || up || down;
 
+    // Sitting: any movement key or click while sitting → stand up
+    if (this.isSitting) {
+      if (hasKeyboardInput || this.currentPath) {
+        this.standUp();
+      } else {
+        // Remain seated — freeze velocity
+        body.setVelocity(0, 0);
+        if (this.playerNameLabel) {
+          this.playerNameLabel.setPosition(this.player.x, this.player.y - 44);
+        }
+        if (this.player) this.updateYSortDepth(this.player);
+        return;
+      }
+    }
+
     // Arrow keys cancel path following
     if (hasKeyboardInput && this.currentPath) {
       this.currentPath = null;
@@ -3568,6 +3635,16 @@ export class GameScene extends Phaser.Scene {
               EventBus.emit("npc:interact", { npcId: npc.id, npcName: npc.name });
             }
             this.targetNpcId = null;
+          }
+
+          // Arrived at destination — check if there's a chair here to sit on
+          if (!this.dialogOpen) {
+            const arrivedCol = Math.floor(this.player.x / TILE_SIZE);
+            const arrivedRow = Math.floor(this.player.y / TILE_SIZE);
+            const chair = this.findChairAt(arrivedCol, arrivedRow);
+            if (chair) {
+              this.sitOnChair(chair);
+            }
           }
         }
       } else {
