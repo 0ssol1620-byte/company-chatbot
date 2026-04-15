@@ -1256,11 +1256,45 @@ export class GameScene extends Phaser.Scene {
       this.updateLayerText();
     });
 
-    // Teleport to another player's position
+    // Save from React sidebar button
+    EventBus.on("editor:save-map", () => {
+      if (this.editorMode) this.saveMap();
+    });
+
+    // Teleport to another player's position (local tab players)
     EventBus.on("teleport-to-player", (data: { playerId: string }) => {
       const remote = this.remotePlayers.get(data.playerId);
       if (remote && this.player) {
         this.player.setPosition(remote.targetX, remote.targetY);
+      }
+    });
+
+    // Teleport to absolute world position (used for cross-machine Supabase players)
+    EventBus.on("teleport-to-position", (data: { x: number; y: number }) => {
+      if (this.player) {
+        this.player.setPosition(data.x, data.y);
+      }
+    });
+
+    // Editor zoom control from React panel
+    EventBus.on("editor:set-zoom", (data: { zoom: number }) => {
+      const z = Math.max(0.5, Math.min(4, data.zoom));
+      this.cameras.main.setZoom(z);
+      this.applyMainCameraBounds(this.currentMapPixelWidth, this.currentMapPixelHeight);
+      // Re-scale toolbar to compensate for new zoom
+      if (this.editorToolbar) {
+        this.editorToolbar.setScale(1 / z);
+      }
+      // Redraw grid at new zoom
+      if (this.editorMode) this.drawGrid();
+      EventBus.emit("editor:zoom-changed", { zoom: z });
+    });
+
+    // Editor grid visibility toggle
+    EventBus.on("editor:toggle-grid", (data: { visible: boolean }) => {
+      if (this.gridOverlay) {
+        if (data.visible) this.drawGrid();
+        else this.gridOverlay.clear();
       }
     });
 
@@ -2224,9 +2258,9 @@ export class GameScene extends Phaser.Scene {
       this.updateObjectToolbarHighlight(); // refresh highlight on re-open
     }
 
-    // Layer indicator
+    // Layer indicator — positioned to the right of the React sidebar (≥ 264px from left)
     if (!this.editorLayerText) {
-      this.editorLayerText = this.add.text(10, 10, "", {
+      this.editorLayerText = this.add.text(272, 10, "", {
         fontSize: "12px",
         color: "#00ff00",
         stroke: "#000000",
@@ -2239,44 +2273,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.updateLayerText();
     this.editorLayerText.setVisible(true);
-
-    // Status text
-    const statusText = this.add.text(10, 35, "Editor Mode | LMB: place | RMB: erase | 1/2/3: layer | Tab: exit", {
-      fontSize: "10px",
-      color: "#aaaaaa",
-      stroke: "#000000",
-      strokeThickness: 2,
-      backgroundColor: "#000000aa",
-      padding: { x: 4, y: 2 },
-    });
-    statusText.setDepth(20020);
-    statusText.setScrollFactor(0);
-    statusText.setName("editor-status");
-
-    // "Save" button
-    const saveBtn = this.add.text(cam.width / 2, cam.height / 2 - 60, "[ SAVE MAP ]", {
-      fontSize: "14px",
-      color: "#00ff00",
-      stroke: "#000000",
-      strokeThickness: 3,
-      backgroundColor: "#333333",
-      padding: { x: 10, y: 6 },
-    });
-    saveBtn.setOrigin(0.5);
-    saveBtn.setDepth(20020);
-    saveBtn.setScrollFactor(0);
-    saveBtn.setInteractive({ useHandCursor: true });
-    saveBtn.setName("editor-save-btn");
-    saveBtn.setPosition(cam.width / 2, 12);
-    saveBtn.on("pointerdown", () => {
-      this.saveMap();
-    });
-    saveBtn.on("pointerover", () => {
-      saveBtn.setStyle({ color: "#44ff44" });
-    });
-    saveBtn.on("pointerout", () => {
-      saveBtn.setStyle({ color: "#00ff00" });
-    });
+    // Save button is now in the React sidebar — no Phaser save button needed
   }
 
   private hideEditor(): void {
@@ -2298,11 +2295,9 @@ export class GameScene extends Phaser.Scene {
       this.editorObjectPreview = null;
     }
     this.editorObjectMode = false;
-    // Remove status text and save button
-    const status = this.children.getByName("editor-status");
-    if (status) status.destroy();
-    const saveBtn = this.children.getByName("editor-save-btn");
-    if (saveBtn) saveBtn.destroy();
+    // Restore camera zoom to default when exiting editor
+    this.cameras.main.setZoom(MAIN_CAMERA_ZOOM);
+    this.applyMainCameraBounds(this.currentMapPixelWidth, this.currentMapPixelHeight);
   }
 
   private drawGrid(): void {

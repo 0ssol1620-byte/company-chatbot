@@ -77,6 +77,13 @@ interface NpcHireModalProps {
     appearance: unknown;
     direction?: string;
     agentId?: string | null;
+    agentConfig?: {
+      provider: "openai" | "anthropic" | "google";
+      model: string;
+      apiKey: string;
+      systemPrompt: string;
+      files?: LocalAgentFile[];
+    };
   } | null;
   currentNpcCount: number;
 }
@@ -210,11 +217,20 @@ export default function NpcHireModal({
         setIdentityCustomized(false);
         setSoulCustomized(false);
       }
-      setAiProvider("openai");
-      setAiModel("");
-      setAiApiKey("");
-      setAiSystemPrompt("");
-      setAiFiles([]);
+      // Pre-populate AI fields from existing agentConfig when editing
+      if (editingNpc?.agentConfig) {
+        setAiProvider(editingNpc.agentConfig.provider);
+        setAiModel(editingNpc.agentConfig.model);
+        setAiApiKey(editingNpc.agentConfig.apiKey);
+        setAiSystemPrompt(editingNpc.agentConfig.systemPrompt);
+        setAiFiles(editingNpc.agentConfig.files ?? []);
+      } else {
+        setAiProvider("openai");
+        setAiModel("");
+        setAiApiKey("");
+        setAiSystemPrompt("");
+        setAiFiles([]);
+      }
     });
   }, [isOpen, editingNpc, setBodyType, setLayers, setActiveCategory]);
 
