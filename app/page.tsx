@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useT, useLocale, LOCALES } from "@/lib/i18n";
-import { ClipboardList, MessageSquare, Undo2, Clock, Footprints, PhoneCall, Bell, ChevronDown, UserPlus, UserMinus, Settings, LogOut, Pencil, Users, Globe, RotateCcw, Bug, Info } from "lucide-react";
+import { ClipboardList, MessageSquare, Undo2, Clock, Footprints, PhoneCall, Bell, ChevronDown, UserPlus, UserMinus, Settings, LogOut, Pencil, Users, Globe, RotateCcw, Bug, Info, Search } from "lucide-react";
 import {
   CharacterAppearance,
   LegacyCharacterAppearance,
@@ -16,6 +16,7 @@ import ChatPanel, { type ChannelChatMessage } from "@/components/ChatPanel";
 import MeetingRoom from "@/components/MeetingRoom";
 import NpcHireModal from "@/components/NpcHireModal";
 import MapEditorPanel, { type TilesetDef } from "@/components/MapEditorPanel";
+import PlayerDirectoryModal from "@/components/PlayerDirectoryModal";
 import type { NpcChatMessage } from "@/components/NpcDialog";
 import TaskBoard from "@/components/TaskBoard";
 import type { Task } from "@/components/TaskCard";
@@ -30,6 +31,11 @@ import {
   getChannel, saveChannel,
   type LocalNpc,
 } from "@/lib/local-store";
+import {
+  upsertPlayer, updatePlayerPosition, getOfflinePlayers, sendOfflineMessage,
+  getUnreadMessages, markMessagesRead,
+  type PlayerRecord, type OfflineMessage,
+} from "@/lib/player-registry";
 
 const APP_VERSION = "2026.4.6";
 const BUG_REPORT_BASE_URL = "https://github.com/0ssol1620-byte/company-chatbot/issues/new";
@@ -227,13 +233,23 @@ function GamePageInner() {
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [meetingMinutesCount, setMeetingMinutesCount] = useState(0);
 
+  // Offline player registry + inbox
+  const [showDirectory, setShowDirectory] = useState(false);
+  const [offlinePlayers, setOfflinePlayers] = useState<PlayerRecord[]>([]);
+  const [inbox, setInbox] = useState<OfflineMessage[]>([]);
+  const [showInbox, setShowInbox] = useState(false);
+  const [offlineMsgTarget, setOfflineMsgTarget] = useState<{ id: string; name: string } | null>(null);
+  const [offlineMsgText, setOfflineMsgText] = useState("");
+  const [offlineMsgSending, setOfflineMsgSending] = useState(false);
+  const positionUpdateTimerRef = useRef<number>(0);
+
   // Owner & NPC management state — always true in local mode
   const [isOwner, setIsOwner] = useState(true);
   const [showHireModal, setShowHireModal] = useState(false);
   const [placementMode, setPlacementMode] = useState(false);
   const [spawnSetMode, setSpawnSetMode] = useState(false);
   const [pendingNpc, setPendingNpc] = useState<{ presetId?: string; name: string; persona: string; appearance: unknown; direction: string; agentId?: string; agentAction?: "select" | "create"; identity?: string; soul?: string; locale?: string; provider?: string; model?: string; apiKey?: string; systemPrompt?: string; files?: import("@/lib/local-store").LocalAgentFile[] } | null>(null);
-  const [editingNpc, setEditingNpc] = useState<{ id: string; name: string; persona: string; appearance: unknown; direction?: string; agentId?: string | null } | null>(null);
+  const [editingNpc, setEditingNpc] = useState<{ id: string; name: string; persona: string; appearance: unknown; direction?: string; agentId?: string | null; agentConfig?: import("@/lib/local-store").LocalAgentConfig } | null>(null);
 
   // NPC context menu (right-click) state
   const [contextMenu, setContextMenu] = useState<{
@@ -257,6 +273,8 @@ function GamePageInner() {
   const localMultiplayer = useRef<LocalMultiplayer | null>(null);
   // SupabaseMultiplayer (Realtime Presence + Broadcast for cross-machine sync)
   const supabaseMultiplayer = useRef<SupabaseMultiplayer | null>(null);
+  // Track last known world positions of remote players (playerId → {x, y})
+  const remotePlayerPositions = useRef<Map<string, { x: number; y: number }>>(new Map());
 
   const openBugReport = useCallback(() => {
     const userAgent = typeof window !== "undefined" ? window.navigator.userAgent : "unknown";
@@ -460,6 +478,11 @@ function GamePageInner() {
     setAllTasks(getTasks());
     setMeetingMinutesCount(getMeetings().length);
 
+    // Register current player in Supabase registry + check inbox
+    const charId = char.id || crypto.randomUUID();
+    upsertPlayer({ id: charId, name: char.name, appearance: char.appearance }).catch(() => {});
+    getUnreadMessages(charId).then(msgs => { if (msgs.length) setInbox(msgs); }).catch(() => {});
+
     // Set player list (just self)
     setChannelPlayers([{
       id: "__self__",
@@ -497,6 +520,7 @@ function GamePageInner() {
 
     sm.on('player:joined', (data) => {
       const p = data as PlayerPresence;
+      if (p.position) remotePlayerPositions.current.set(p.playerId, p.position);
       setChannelPlayers(prev => {
         if (prev.some(x => x.id === p.playerId)) return prev;
         return [...prev, { id: p.playerId, name: p.name, appearance: p.appearance as CharacterAppearance | LegacyCharacterAppearance | null }];
@@ -506,7 +530,13 @@ function GamePageInner() {
 
     sm.on('player:left', (data) => {
       const p = data as { playerId: string };
-      setChannelPlayers(prev => prev.filter(x => x.id !== p.playerId));
+      setChannelPlayers(prev => {
+        const next = prev.filter(x => x.id !== p.playerId);
+        // Refresh offline list now that someone left
+        const onlineIds = next.map(x => x.id).filter(id => id !== '__self__');
+        getOfflinePlayers([charId, ...onlineIds]).then(setOfflinePlayers).catch(() => {});
+        return next;
+      });
       EventBus.emit('player:left', p);
     });
 
@@ -516,12 +546,21 @@ function GamePageInner() {
         id,
         name: presences[0]?.name || 'Unknown',
         appearance: (presences[0]?.appearance as CharacterAppearance | LegacyCharacterAppearance | null) || null,
+        position: presences[0]?.position,
       }));
+      // Seed last-known positions from presence data
+      players.forEach(p => {
+        if (p.position) remotePlayerPositions.current.set(p.id, p.position);
+      });
       setChannelPlayers(prev => {
         // Keep self, merge others
         const self = prev.find(p => p.id === '__self__');
         const others = players.filter(p => p.id !== (char.id || ''));
-        return self ? [self, ...others] : others;
+        const next = self ? [self, ...others] : others;
+        // Compute offline players = registry minus current online
+        const onlineIds = [charId, ...others.map(x => x.id)];
+        getOfflinePlayers(onlineIds).then(setOfflinePlayers).catch(() => {});
+        return next;
       });
     });
 
@@ -536,6 +575,7 @@ function GamePageInner() {
 
     sm.on('player:moved', (data) => {
       const { playerId, x, y } = data as { playerId: string; x: number; y: number };
+      remotePlayerPositions.current.set(playerId, { x, y });
       EventBus.emit('player:moved', { playerId, x, y });
     });
 
@@ -819,9 +859,54 @@ function GamePageInner() {
 
   // H2: Teleport to another player's position
   const handleVisitPlayer = useCallback((playerId: string) => {
-    EventBus.emit("teleport-to-player", { playerId });
+    // Try Supabase-tracked world position first (cross-machine players)
+    const pos = remotePlayerPositions.current.get(playerId);
+    if (pos) {
+      EventBus.emit("teleport-to-position", pos);
+    } else {
+      // Fall back to LocalMultiplayer (same-browser tab players)
+      EventBus.emit("teleport-to-player", { playerId });
+    }
     closeRosterMenus();
   }, [closeRosterMenus]);
+
+  // Visit offline player: teleport to their last known position + open message dialog
+  const handleVisitOfflinePlayer = useCallback((player: PlayerRecord) => {
+    if (player.last_position) {
+      EventBus.emit("teleport-to-position", player.last_position);
+    } else {
+      showToastNotification(`offline-no-pos-${player.id}`, t("game.offlineNoPosition"));
+    }
+    setOfflineMsgTarget({ id: player.id, name: player.name });
+    setOfflineMsgText("");
+    closeRosterMenus();
+  }, [closeRosterMenus, showToastNotification, t]);
+
+  const handleSendOfflineMessage = useCallback(async () => {
+    if (!offlineMsgTarget || !offlineMsgText.trim() || !character) return;
+    setOfflineMsgSending(true);
+    const ok = await sendOfflineMessage({
+      toPlayerId: offlineMsgTarget.id,
+      fromPlayerId: character.id,
+      fromPlayerName: character.name,
+      content: offlineMsgText.trim(),
+    });
+    setOfflineMsgSending(false);
+    if (ok) {
+      showToastNotification(`offline-msg-sent-${Date.now()}`, t("game.leaveMessageSent"));
+      setOfflineMsgTarget(null);
+      setOfflineMsgText("");
+    } else {
+      showToastNotification(`offline-msg-fail-${Date.now()}`, t("game.leaveMessageFailed"));
+    }
+  }, [offlineMsgTarget, offlineMsgText, character, showToastNotification, t]);
+
+  const handleMarkInboxRead = useCallback(async () => {
+    const ids = inbox.map(m => m.id);
+    await markMessagesRead(ids);
+    setInbox([]);
+    setShowInbox(false);
+  }, [inbox]);
 
   // H1: Toggle map editor — state is now driven by editor:state event from GameScene
   const handleToggleMapEditor = useCallback(() => {
@@ -934,29 +1019,73 @@ function GamePageInner() {
 
       const decoder = new TextDecoder();
       let fullResponse = "";
+      let pendingSseLine = "";
+
+      const appendNpcStreamText = (text: string) => {
+        if (!text) return;
+        fullResponse += text;
+        streamBufferRef.current = fullResponse;
+        const sanitized = sanitizeNpcResponseText(fullResponse, { stripIncompleteTail: true });
+        setNpcMessages(prev => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "npc") {
+            return [...prev.slice(0, -1), { role: "npc", content: sanitized }];
+          }
+          return [...prev, { role: "npc", content: sanitized }];
+        });
+      };
+
+      const processStreamLine = (rawLine: string) => {
+        const line = rawLine.trim();
+        if (!line) return;
+
+        // Legacy AI SDK text stream format (kept for backwards compatibility)
+        if (line.startsWith("0:")) {
+          try {
+            const text = JSON.parse(line.slice(2));
+            if (typeof text === "string") {
+              appendNpcStreamText(text);
+            }
+          } catch {
+            // skip malformed legacy chunk
+          }
+          return;
+        }
+
+        // AI SDK 6 UI message stream format: SSE lines like
+        // data: {"type":"text-delta","delta":"..."}
+        if (!line.startsWith("data:")) return;
+
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") return;
+
+        try {
+          const event = JSON.parse(payload) as { type?: string; delta?: string; errorText?: string };
+          if (event.type === "text-delta" && typeof event.delta === "string") {
+            appendNpcStreamText(event.delta);
+          } else if (event.type === "error" && event.errorText) {
+            showToastNotification("npc-chat-error", event.errorText);
+          }
+        } catch {
+          // skip malformed SSE payload
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        // AI SDK streams data: prefix lines
-        for (const line of chunk.split("\n")) {
-          if (line.startsWith("0:")) {
-            try {
-              const text = JSON.parse(line.slice(2));
-              fullResponse += text;
-              streamBufferRef.current = fullResponse;
-              const sanitized = sanitizeNpcResponseText(fullResponse, { stripIncompleteTail: true });
-              setNpcMessages(prev => {
-                const last = prev[prev.length - 1];
-                if (last?.role === "npc") {
-                  return [...prev.slice(0, -1), { role: "npc", content: sanitized }];
-                }
-                return [...prev, { role: "npc", content: sanitized }];
-              });
-            } catch { /* skip malformed */ }
-          }
+
+        pendingSseLine += decoder.decode(value, { stream: true });
+        const lines = pendingSseLine.split("\n");
+        pendingSseLine = lines.pop() ?? "";
+
+        for (const line of lines) {
+          processStreamLine(line);
         }
+      }
+
+      if (pendingSseLine) {
+        processStreamLine(pendingSseLine);
       }
 
       // Finalize response
@@ -1072,10 +1201,17 @@ function GamePageInner() {
   }, [isOwner]);
 
   // Forward local player movement to Supabase for cross-machine sync
+  // Also throttle position writes to player_registry (max once per 15s)
   useEffect(() => {
     const onPlayerMoved = (data: unknown) => {
       const { playerId, x, y } = data as { playerId: string; x: number; y: number };
       supabaseMultiplayer.current?.emit('player:moved', { playerId, x, y }).catch(() => {});
+      // Throttled registry update
+      const now = Date.now();
+      if (now - positionUpdateTimerRef.current > 15_000) {
+        positionUpdateTimerRef.current = now;
+        updatePlayerPosition(playerId, x, y).catch(() => {});
+      }
     };
     EventBus.on('player:moved-local', onPlayerMoved);
     return () => { EventBus.off('player:moved-local', onPlayerMoved); };
@@ -1159,6 +1295,7 @@ function GamePageInner() {
         appearance: npc.appearance,
         direction: npc.direction,
         agentId: npc.agentConfig.provider + ":" + npc.agentConfig.model,
+        agentConfig: npc.agentConfig,
       });
       setShowHireModal(true);
     };
@@ -1279,11 +1416,12 @@ function GamePageInner() {
         )}
       </div>
 
-      {/* Map Editor tile picker panel */}
+      {/* Map Editor — left sidebar */}
       {editorModeActive && (
         <MapEditorPanel
           tilesets={editorTilesets as TilesetDef[] | null}
           tiledMode={editorTiledMode}
+          onSave={() => EventBus.emit("editor:save-map")}
         />
       )}
 
@@ -1335,9 +1473,9 @@ function GamePageInner() {
                 className="relative flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-caption text-text-secondary"
               >
                 <span className="w-2 h-2 rounded-full bg-sky-400" />
-                {unreadChatCount > 0 && (
+                {(unreadChatCount > 0 || inbox.length > 0) && (
                   <span className="absolute -top-1 -right-1 min-w-[16px] h-4 bg-danger text-white text-micro rounded-full flex items-center justify-center px-1 font-bold">
-                    {unreadChatCount > 9 ? "9+" : unreadChatCount}
+                    {(unreadChatCount + inbox.length) > 9 ? "9+" : (unreadChatCount + inbox.length)}
                   </span>
                 )}
                 <span>{t("game.playersOnlineCount", { count: channelPlayers.length })}</span>
@@ -1351,6 +1489,19 @@ function GamePageInner() {
               >
                 <span className="w-2 h-2 rounded-full bg-violet-400" />
                 <span>{t("game.npcsAtWorkCount", { count: channelNpcs.length })}</span>
+              </button>
+              {/* Player directory button */}
+              <button
+                onClick={() => { setShowDirectory(true); closeRosterMenus(); }}
+                className="relative flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-caption text-text-secondary"
+                title={t("game.playerDirectory")}
+              >
+                <Search className="w-3 h-3" />
+                {inbox.length > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 bg-amber-500 text-white text-micro rounded-full flex items-center justify-center px-0.5 font-bold">
+                    {inbox.length > 9 ? "9+" : inbox.length}
+                  </span>
+                )}
               </button>
             </div>
 
@@ -1375,28 +1526,79 @@ function GamePageInner() {
                 </div>
                 <div className="max-h-64 overflow-y-auto py-1">
                   {showRosterMenu === "players" ? (
-                    channelPlayers.length > 0 ? channelPlayers.map((player) => (
-                      player.id === "__self__" ? (
-                        <div key={player.id} className="px-3 py-2 text-body text-text-secondary flex items-center gap-2">
-                          <RosterAvatar appearance={player.appearance} />
-                          <span className="truncate">{player.name}</span>
-                          <span className="ml-auto text-micro text-text-dim">{t("game.you")}</span>
-                        </div>
-                      ) : (
-                        <div key={player.id} className="px-3 py-2 text-body text-text-secondary hover:bg-surface-raised flex items-center gap-2">
-                          <RosterAvatar appearance={player.appearance} />
-                          <span className="truncate flex-1">{player.name}</span>
-                          <button
-                            onClick={() => handleVisitPlayer(player.id)}
-                            className="px-2 py-0.5 rounded text-micro bg-primary/70 hover:bg-primary text-white font-semibold shrink-0"
-                          >
-                            {t("game.visitPlayer")}
-                          </button>
-                        </div>
-                      )
-                    )) : (
-                      <div className="px-3 py-3 text-caption text-text-dim">{t("game.noPlayersOnline")}</div>
-                    )
+                    <>
+                      {/* Online players */}
+                      {channelPlayers.length > 0 ? channelPlayers.map((player) => (
+                        player.id === "__self__" ? (
+                          <div key={player.id} className="px-3 py-2 text-body text-text-secondary flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                            <RosterAvatar appearance={player.appearance} />
+                            <span className="truncate">{player.name}</span>
+                            <span className="ml-auto text-micro text-text-dim">{t("game.you")}</span>
+                          </div>
+                        ) : (
+                          <div key={player.id} className="px-3 py-2 text-body text-text-secondary hover:bg-surface-raised flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                            <RosterAvatar appearance={player.appearance} />
+                            <span className="truncate flex-1">{player.name}</span>
+                            <button
+                              onClick={() => handleVisitPlayer(player.id)}
+                              className="px-2 py-0.5 rounded text-micro bg-primary/70 hover:bg-primary text-white font-semibold shrink-0"
+                            >
+                              {t("game.visitPlayer")}
+                            </button>
+                          </div>
+                        )
+                      )) : (
+                        <div className="px-3 py-2 text-caption text-text-dim">{t("game.noPlayersOnline")}</div>
+                      )}
+
+                      {/* Inbox section */}
+                      {inbox.length > 0 && (
+                        <>
+                          <div className="px-3 py-1.5 border-t border-border flex items-center justify-between">
+                            <span className="text-micro font-semibold text-amber-400 uppercase tracking-wide">
+                              {t("game.inbox")} ({inbox.length})
+                            </span>
+                            <button
+                              onClick={handleMarkInboxRead}
+                              className="text-micro text-text-dim hover:text-text-secondary"
+                            >
+                              {t("game.inboxMarkRead")}
+                            </button>
+                          </div>
+                          {inbox.map(msg => (
+                            <div key={msg.id} className="px-3 py-2 bg-amber-500/5 border-l-2 border-amber-500/40">
+                              <div className="text-micro text-amber-400 mb-0.5">{t("game.inboxFrom", { name: msg.from_player_name })}</div>
+                              <div className="text-caption text-text-secondary break-words">{msg.content}</div>
+                              <div className="text-micro text-text-dim mt-0.5">{new Date(msg.created_at).toLocaleString()}</div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+
+                      {/* Offline players section */}
+                      {offlinePlayers.length > 0 && (
+                        <>
+                          <div className="px-3 py-1.5 border-t border-border">
+                            <span className="text-micro font-semibold text-text-dim uppercase tracking-wide">{t("game.offlinePlayers")}</span>
+                          </div>
+                          {offlinePlayers.map(player => (
+                            <div key={player.id} className="px-3 py-2 text-body text-text-dim hover:bg-surface-raised flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-gray-500 shrink-0" />
+                              <RosterAvatar appearance={player.appearance as CharacterAppearance | LegacyCharacterAppearance | null} />
+                              <span className="truncate flex-1">{player.name}</span>
+                              <button
+                                onClick={() => handleVisitOfflinePlayer(player)}
+                                className="px-2 py-0.5 rounded text-micro bg-gray-700 hover:bg-gray-600 text-gray-300 font-semibold shrink-0"
+                              >
+                                {t("game.visitOffline")}
+                              </button>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </>
                   ) : (
                     channelNpcs.length > 0 ? channelNpcs.map((npc) => (
                       <button
@@ -1766,6 +1968,66 @@ function GamePageInner() {
         onResumeTask={resumeTask}
         onCompleteTask={completeTask}
       />
+
+      {/* Player directory modal */}
+      <PlayerDirectoryModal
+        isOpen={showDirectory}
+        onClose={() => setShowDirectory(false)}
+        onlinePlayerIds={channelPlayers.filter(p => p.id !== "__self__").map(p => p.id)}
+        selfId={character?.id ?? ""}
+        onVisit={(player, isOnline) => {
+          setShowDirectory(false);
+          if (isOnline) {
+            const pos = remotePlayerPositions.current.get(player.id);
+            if (pos) EventBus.emit("teleport-to-position", pos);
+            else EventBus.emit("teleport-to-player", { playerId: player.id });
+          } else {
+            if (player.last_position) EventBus.emit("teleport-to-position", player.last_position);
+            else showToastNotification(`offline-no-pos-${player.id}`, t("game.offlineNoPosition"));
+          }
+        }}
+        onMessage={(player) => {
+          setShowDirectory(false);
+          setOfflineMsgTarget({ id: player.id, name: player.name });
+          setOfflineMsgText("");
+        }}
+        inbox={inbox}
+        onMarkInboxRead={handleMarkInboxRead}
+        renderAvatar={(appearance) => <RosterAvatar appearance={appearance} />}
+      />
+
+      {/* Offline message dialog */}
+      {offlineMsgTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setOfflineMsgTarget(null)}>
+          <div className="bg-surface border border-border rounded-xl shadow-2xl w-full max-w-sm mx-4 p-5" onClick={e => e.stopPropagation()}>
+            <h3 className="text-body font-semibold text-text mb-3">
+              {t("game.leaveMessageTitle", { name: offlineMsgTarget.name })}
+            </h3>
+            <textarea
+              className="w-full h-28 bg-gray-800 border border-border rounded-lg px-3 py-2 text-body text-text resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+              placeholder={t("game.leaveMessagePlaceholder")}
+              value={offlineMsgText}
+              onChange={e => setOfflineMsgText(e.target.value)}
+              maxLength={500}
+            />
+            <div className="flex justify-end gap-2 mt-3">
+              <button
+                onClick={() => setOfflineMsgTarget(null)}
+                className="px-3 py-1.5 rounded-lg text-caption text-text-dim hover:bg-surface-raised"
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                onClick={handleSendOfflineMessage}
+                disabled={!offlineMsgText.trim() || offlineMsgSending}
+                className="px-4 py-1.5 rounded-lg text-caption font-semibold bg-primary hover:bg-primary-hover text-white disabled:opacity-40"
+              >
+                {offlineMsgSending ? "..." : t("game.leaveMessageSend")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Placement mode indicator */}
       {placementMode && (
