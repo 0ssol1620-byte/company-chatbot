@@ -225,6 +225,7 @@ function GamePageInner() {
   const [character, setCharacter] = useState<Character | null>(null);
   const [spritesheetDataUrl, setSpritesheetDataUrl] = useState<string | null>(null);
   const [gameChannelData, setGameChannelData] = useState<PendingChannelData>(null);
+  const [phaserSceneKey, setPhaserSceneKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -398,6 +399,10 @@ function GamePageInner() {
 
     setPendingChannelData(pending);
     setGameChannelData(pending);
+    // Force a fresh Phaser instance whenever office seed/map context changes.
+    // The scene only consumes pendingChannelData during create(), so office switching
+    // must remount the game to avoid rendering the previously loaded office.
+    setPhaserSceneKey((prev) => prev + 1);
     setChannelNpcs(seed.npcs.map((npc) => ({ id: npc.id, name: npc.name, appearance: npc.appearance })));
     setAllTasks(seed.tasks);
     setChannelPlayers([
@@ -1811,6 +1816,7 @@ function GamePageInner() {
       <div style={{ visibility: mode === "office" ? "visible" : "hidden", position: mode === "office" ? "relative" : "absolute", pointerEvents: mode === "office" ? "auto" : "none" }}>
         {spritesheetDataUrl && character && gameChannelData && (
           <PhaserGame
+            key={`phaser-office-${phaserSceneKey}`}
             spritesheetDataUrl={spritesheetDataUrl}
             localMultiplayer={localMultiplayer.current}
             characterId={character.id}
