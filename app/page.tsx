@@ -400,7 +400,12 @@ function GamePageInner() {
     setCurrentOfficeName(runtime.officeName);
     setCurrentOfficeOwnerId(runtime.ownerPlayerId);
     setCurrentOfficeOwnerName(runtime.ownerPlayerName);
+    currentOfficeIdRef.current = runtime.officeId;
+    currentOfficeNameRef.current = runtime.officeName;
+    currentOfficeOwnerIdRef.current = runtime.ownerPlayerId;
+    currentOfficeOwnerNameRef.current = runtime.ownerPlayerName;
     setIsOwner(runtime.isOwner);
+    isOwnerRef.current = runtime.isOwner;
     setVisitingOfficeNotice(runtime.isVisiting ? `${runtime.ownerPlayerName} · ${runtime.officeName}` : null);
 
     const pending = buildPendingOfficeChannelData({
@@ -436,6 +441,13 @@ function GamePageInner() {
       position: seed.savedPosition,
       offline: seed.ownerOffline ?? false,
     } : null);
+    officeOwnerPreviewRef.current = runtime.isVisiting ? {
+      id: seed.ownerPlayerId,
+      name: seed.ownerPlayerName,
+      appearance: seed.ownerAppearance ?? null,
+      position: seed.savedPosition,
+      offline: seed.ownerOffline ?? false,
+    } : null;
     appendOfficeTrace("office:apply-seed:done", {
       runtimeOfficeId: runtime.officeId,
       runtimeOfficeName: runtime.officeName,
@@ -453,12 +465,14 @@ function GamePageInner() {
   const currentOfficeOwnerIdRef = useRef(currentOfficeOwnerId);
   const currentOfficeOwnerNameRef = useRef(currentOfficeOwnerName);
   const officeOwnerPreviewRef = useRef(officeOwnerPreview);
+  const isOwnerRef = useRef(isOwner);
 
   useEffect(() => { currentOfficeIdRef.current = currentOfficeId; }, [currentOfficeId]);
   useEffect(() => { currentOfficeNameRef.current = currentOfficeName; }, [currentOfficeName]);
   useEffect(() => { currentOfficeOwnerIdRef.current = currentOfficeOwnerId; }, [currentOfficeOwnerId]);
   useEffect(() => { currentOfficeOwnerNameRef.current = currentOfficeOwnerName; }, [currentOfficeOwnerName]);
   useEffect(() => { officeOwnerPreviewRef.current = officeOwnerPreview; }, [officeOwnerPreview]);
+  useEffect(() => { isOwnerRef.current = isOwner; }, [isOwner]);
 
   const openBugReport = useCallback(() => {
     const userAgent = typeof window !== "undefined" ? window.navigator.userAgent : "unknown";
@@ -1323,7 +1337,7 @@ function GamePageInner() {
     }).catch(() => {});
     appendOfficeTrace("office:switch:complete", {
       targetOfficeId: target.officeId,
-      activeOfficeId: homeOfficeId,
+      activeOfficeId: currentOfficeIdRef.current,
       preservedHomeOfficeId: homeOfficeId,
       preservedHomeOfficeName: homeOfficeName,
     });
@@ -1720,25 +1734,26 @@ function GamePageInner() {
   // Emit owner status when scene is ready
   useEffect(() => {
     const onSceneReady = () => {
+      const ownerPreview = officeOwnerPreviewRef.current;
       appendOfficeTrace("scene:ready", {
         officeId: currentOfficeIdRef.current,
-        ownerId: officeOwnerPreview?.id ?? null,
-        ownerOffline: officeOwnerPreview?.offline ?? null,
+        ownerId: ownerPreview?.id ?? null,
+        ownerOffline: ownerPreview?.offline ?? null,
       });
-      EventBus.emit("owner-status", { isOwner });
-      if (officeOwnerPreview && officeOwnerPreview.id !== character?.id) {
+      EventBus.emit("owner-status", { isOwner: isOwnerRef.current });
+      if (ownerPreview && ownerPreview.id !== character?.id) {
         EventBus.emit("player:joined", {
-          playerId: officeOwnerPreview.id,
-          name: officeOwnerPreview.name,
-          appearance: officeOwnerPreview.appearance,
-          position: officeOwnerPreview.position ?? undefined,
-          offline: officeOwnerPreview.offline,
+          playerId: ownerPreview.id,
+          name: ownerPreview.name,
+          appearance: ownerPreview.appearance,
+          position: ownerPreview.position ?? undefined,
+          offline: ownerPreview.offline,
         });
       }
     };
     EventBus.on("scene-ready", onSceneReady);
     return () => { EventBus.off("scene-ready", onSceneReady); };
-  }, [character?.id, isOwner, officeOwnerPreview]);
+  }, [character?.id]);
 
   // Forward local player movement to Supabase for cross-machine sync
   // Also throttle position writes to player_registry (max once per 15s)
