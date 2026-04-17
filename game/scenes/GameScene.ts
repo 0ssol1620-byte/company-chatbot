@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { EventBus, pendingChannelData, setPendingChannelData } from "../EventBus";
 import type { LocalMultiplayer } from "@/lib/local-multiplayer";
+import { appendOfficeTrace } from "@/lib/office-debug";
 import { getOfficeNpcs, type LocalNpc } from "@/lib/local-store";
 import { MapObject, MapData, OBJECT_TYPES, OBJECT_TYPE_LIST, computeOccupiedTiles, detectAndConvertMapData, generateObjectId, canPlaceObject, getObjectDimensions } from "@/lib/object-types";
 import { getCenteredCameraBounds } from "../camera-layout";
@@ -1023,12 +1024,21 @@ export class GameScene extends Phaser.Scene {
   // ---------------------------------------------------------------------------
 
   create(): void {
+    appendOfficeTrace("scene:create:start", {
+      hasPendingChannelData: !!pendingChannelData,
+    });
     // Read pending channel data set by game page before scene creation
     let tiledJsonData: Record<string, unknown> | null = null;
     const initialChannelData = pendingChannelData;
 
     if (initialChannelData) {
       this.channelId = initialChannelData.channelId;
+      appendOfficeTrace("scene:create:channel-data", {
+        channelId: this.channelId,
+        hasMapData: !!initialChannelData.mapData,
+        hasTiledJson: !!initialChannelData.tiledJson,
+        savedPosition: initialChannelData.savedPosition ?? null,
+      });
 
       if (initialChannelData.tiledJson) {
         // Explicit Tiled JSON passed from game page
@@ -1297,6 +1307,11 @@ export class GameScene extends Phaser.Scene {
 
     // Remote player sync from React/Supabase presence
     this.bindEventBus("player:joined", (data: { playerId: string; name: string; appearance: unknown; position?: { x: number; y: number }; offline?: boolean }) => {
+      appendOfficeTrace("scene:player-joined", {
+        channelId: this.channelId,
+        playerId: data.playerId,
+        offline: data.offline ?? false,
+      });
       const joined = data;
       const position = joined.position ?? { x: TILE_SIZE * 10, y: TILE_SIZE * 7 };
       const existing = this.remotePlayers.get(joined.playerId);
@@ -1316,6 +1331,10 @@ export class GameScene extends Phaser.Scene {
       });
     });
     this.bindEventBus("player:left", (data: { playerId: string }) => {
+      appendOfficeTrace("scene:player-left", {
+        channelId: this.channelId,
+        playerId: data.playerId,
+      });
       const remote = this.remotePlayers.get(data.playerId);
       if (remote) {
         remote.destroy();
@@ -1323,6 +1342,13 @@ export class GameScene extends Phaser.Scene {
       }
     });
     this.bindEventBus("player:moved", (data: { playerId: string; x: number; y: number; offline?: boolean }) => {
+      appendOfficeTrace("scene:player-moved", {
+        channelId: this.channelId,
+        playerId: data.playerId,
+        x: data.x,
+        y: data.y,
+        offline: data.offline ?? false,
+      });
       const remote = this.remotePlayers.get(data.playerId);
       if (remote) {
         remote.updatePosition(data.x, data.y, "down", "idle", data.offline);
@@ -1659,6 +1685,11 @@ export class GameScene extends Phaser.Scene {
         }
         for (const [playerId, remote] of this.remotePlayers) {
           if (remote.distanceTo(worldPoint.x, worldPoint.y) < TILE_SIZE) {
+            appendOfficeTrace("scene:player-context-menu", {
+              channelId: this.channelId,
+              playerId,
+              offline: remote.offline,
+            });
             EventBus.emit("player:context-menu", {
               playerId,
               playerName: remote.nameLabel.text,

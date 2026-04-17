@@ -82,6 +82,7 @@ import {
   getOfficeIdForPlayer,
   isPlayerRegistryRecentlyActive,
 } from "@/lib/office-state";
+import { appendOfficeTrace, clearOfficeTrace, getRecentOfficeTraceText } from "@/lib/office-debug";
 
 const APP_VERSION = "2026.4.6";
 const BUG_REPORT_BASE_URL = "https://github.com/0ssol1620-byte/company-chatbot/issues/new";
@@ -376,6 +377,16 @@ function GamePageInner() {
     tasks: LocalTask[];
     savedPosition: { x: number; y: number } | null;
   }, currentPlayer: Character) => {
+    appendOfficeTrace("office:apply-seed:start", {
+      seedOfficeId: seed.officeId,
+      seedOfficeName: seed.officeName,
+      ownerPlayerId: seed.ownerPlayerId,
+      currentPlayerId: currentPlayer.id,
+      ownerOffline: seed.ownerOffline ?? false,
+      savedPosition: seed.savedPosition,
+      npcCount: seed.npcs.length,
+      taskCount: seed.tasks.length,
+    });
     const runtime = buildOfficeRuntimeState({
       officeId: seed.officeId,
       officeName: seed.officeName,
@@ -425,6 +436,14 @@ function GamePageInner() {
       position: seed.savedPosition,
       offline: seed.ownerOffline ?? false,
     } : null);
+    appendOfficeTrace("office:apply-seed:done", {
+      runtimeOfficeId: runtime.officeId,
+      runtimeOfficeName: runtime.officeName,
+      ownerPlayerId: runtime.ownerPlayerId,
+      isVisiting: runtime.isVisiting,
+      isOwner: runtime.isOwner,
+      pendingChannelId: pending?.channelId ?? null,
+    });
     remotePlayerPositions.current.clear();
     EventBus.emit("channel-data-ready", pending);
   }, []);
@@ -471,12 +490,16 @@ function GamePageInner() {
   }, []);
 
   const copyDebugInformation = useCallback(async () => {
+    const traceText = getRecentOfficeTraceText(120);
     const debugInfo = [
       `version: v${APP_VERSION}`,
       `browser: ${typeof window !== "undefined" ? window.navigator.userAgent : "unknown"}`,
       `url: ${typeof window !== "undefined" ? window.location.href : "unknown"}`,
       `instanceId: ${instanceId || "unknown"}`,
       `locale: ${locale}`,
+      "",
+      "[recent office trace]",
+      traceText || "(no trace yet)",
     ].join("\n");
 
     await navigator.clipboard.writeText(debugInfo);
@@ -486,12 +509,17 @@ function GamePageInner() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    clearOfficeTrace();
+    appendOfficeTrace("session:init", {
+      path: window.location.pathname,
+    });
     let nextId = window.localStorage.getItem(INSTANCE_ID_STORAGE_KEY);
     if (!nextId) {
       nextId = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       window.localStorage.setItem(INSTANCE_ID_STORAGE_KEY, nextId);
     }
     setInstanceId(nextId);
+    appendOfficeTrace("session:instance-ready", { instanceId: nextId });
   }, []);
 
   // Track player position for beforeunload save
@@ -767,8 +795,16 @@ function GamePageInner() {
     const isStaleSubscription = () => currentOfficeIdRef.current !== officeIdAtSubscribe || supabaseMultiplayer.current !== sm;
 
     sm.on('player:joined', (data) => {
-      if (isStaleSubscription()) return;
+      if (isStaleSubscription()) {
+        appendOfficeTrace("presence:player-joined:stale", { officeId: officeIdAtSubscribe });
+        return;
+      }
       const p = data as PlayerPresence;
+      appendOfficeTrace("presence:player-joined", {
+        officeId: officeIdAtSubscribe,
+        playerId: p.playerId,
+        position: p.position ?? null,
+      });
       if (p.position) remotePlayerPositions.current.set(p.playerId, p.position);
       setOfficeOwnerPreview((prev) => prev && prev.id === p.playerId ? { ...prev, offline: false, position: p.position ?? prev.position } : prev);
       setChannelPlayers(prev => {
@@ -781,8 +817,15 @@ function GamePageInner() {
     });
 
     sm.on('player:left', (data) => {
-      if (isStaleSubscription()) return;
+      if (isStaleSubscription()) {
+        appendOfficeTrace("presence:player-left:stale", { officeId: officeIdAtSubscribe });
+        return;
+      }
       const p = data as { playerId: string };
+      appendOfficeTrace("presence:player-left", {
+        officeId: officeIdAtSubscribe,
+        playerId: p.playerId,
+      });
       setOfficeOwnerPreview((prev) => prev && prev.id === p.playerId ? { ...prev, offline: true } : prev);
       setChannelPlayers(prev => {
         const currentOwnerPreview = officeOwnerPreviewRef.current;
@@ -795,8 +838,15 @@ function GamePageInner() {
     });
 
     sm.on('presence:sync', (data) => {
-      if (isStaleSubscription()) return;
+      if (isStaleSubscription()) {
+        appendOfficeTrace("presence:sync:stale", { officeId: officeIdAtSubscribe });
+        return;
+      }
       const state = data as Record<string, PlayerPresence[]>;
+      appendOfficeTrace("presence:sync", {
+        officeId: officeIdAtSubscribe,
+        playerIds: Object.keys(state),
+      });
       const players = Object.entries(state).map(([id, presences]) => ({
         id,
         name: presences[0]?.name || 'Unknown',
@@ -971,6 +1021,11 @@ function GamePageInner() {
     };
 
     const handlePlayerChatOpen = (data?: { playerId?: string; playerName?: string; offline?: boolean }) => {
+      appendOfficeTrace("player-chat:open", {
+        playerId: data?.playerId ?? null,
+        playerName: data?.playerName ?? null,
+        offline: data?.offline ?? null,
+      });
       resetDialog();
       if (data?.playerId && data.offline) {
         setOfflineMsgTarget({ id: data.playerId, name: data.playerName || "Player" });
@@ -1015,6 +1070,11 @@ function GamePageInner() {
     };
 
     const handlePlayerContextMenu = (data: { playerId: string; playerName: string; screenX: number; screenY: number; offline?: boolean }) => {
+      appendOfficeTrace("player-context-menu", {
+        playerId: data.playerId,
+        playerName: data.playerName,
+        offline: data.offline ?? false,
+      });
       setContextMenu(null);
       setRosterActionMenu({
         type: "player",
@@ -1174,6 +1234,17 @@ function GamePageInner() {
   }) => {
     if (!character) return false;
 
+    appendOfficeTrace("office:switch:start", {
+      fromOfficeId: currentOfficeIdRef.current,
+      toOfficeId: target.officeId,
+      toOfficeName: target.officeName ?? null,
+      ownerPlayerId: target.ownerPlayerId,
+      ownerPlayerName: target.ownerPlayerName,
+      ownerOffline: target.ownerOffline ?? false,
+      preferredSavedPosition: target.preferredSavedPosition ?? null,
+      hasOfficeRecord: !!target.officeRecord,
+    });
+
     const currentPosition = playerPositionRef.current;
     if (currentPosition) {
       saveOfficePlayerPosition(currentOfficeIdRef.current, {
@@ -1191,6 +1262,10 @@ function GamePageInner() {
     }).catch(() => {});
 
     let officeRecord = target.officeRecord ?? await getPlayerOffice(target.officeId);
+    appendOfficeTrace("office:switch:record-loaded", {
+      officeId: target.officeId,
+      foundOfficeRecord: !!officeRecord,
+    });
     if (!officeRecord) {
       try {
         const response = await fetch("/assets/small-office-map.json");
@@ -1208,6 +1283,7 @@ function GamePageInner() {
         } satisfies PlayerOfficeRecord;
         await upsertPlayerOffice(officeRecord).catch(() => {});
       } catch {
+        appendOfficeTrace("office:switch:fallback-map-failed", { officeId: target.officeId });
         return false;
       }
     }
@@ -1245,6 +1321,12 @@ function GamePageInner() {
       office_name: homeOfficeName,
       office_owner_id: character.id,
     }).catch(() => {});
+    appendOfficeTrace("office:switch:complete", {
+      targetOfficeId: target.officeId,
+      activeOfficeId: homeOfficeId,
+      preservedHomeOfficeId: homeOfficeId,
+      preservedHomeOfficeName: homeOfficeName,
+    });
     return true;
   }, [applyOfficeSeed, character, homeOfficeId, homeOfficeName, persistOfficeSnapshot]);
 
@@ -1275,6 +1357,14 @@ function GamePageInner() {
   }, fallbackPos?: { x: number; y: number } | null) => {
     if (!character) return;
 
+    appendOfficeTrace("visit:player:selected", {
+      playerId: player.id,
+      playerName: player.name,
+      registryOfficeId: player.office_id ?? null,
+      registryOfficeOwnerId: player.office_owner_id ?? null,
+      fallbackPos: fallbackPos ?? player.last_position ?? null,
+    });
+
     const homeOfficeTarget = getHomeOfficeTargetForPlayer(player);
     const ok = await switchToOffice({
       officeId: homeOfficeTarget.officeId,
@@ -1293,6 +1383,14 @@ function GamePageInner() {
   }, [character, closeRosterMenus, showToastNotification, switchToOffice]);
 
   const handleVisitOfflinePlayer = useCallback(async (player: PlayerRecord) => {
+    appendOfficeTrace("visit:offline-player:selected", {
+      playerId: player.id,
+      playerName: player.name,
+      registryOfficeId: player.office_id ?? null,
+      registryOfficeOwnerId: player.office_owner_id ?? null,
+      lastSeen: player.last_seen,
+      inferredOnline: isPlayerRegistryRecentlyActive(player.last_seen),
+    });
     const homeOfficeTarget = getHomeOfficeTargetForPlayer(player);
     const ok = await switchToOffice({
       officeId: homeOfficeTarget.officeId,
@@ -1622,6 +1720,11 @@ function GamePageInner() {
   // Emit owner status when scene is ready
   useEffect(() => {
     const onSceneReady = () => {
+      appendOfficeTrace("scene:ready", {
+        officeId: currentOfficeIdRef.current,
+        ownerId: officeOwnerPreview?.id ?? null,
+        ownerOffline: officeOwnerPreview?.offline ?? null,
+      });
       EventBus.emit("owner-status", { isOwner });
       if (officeOwnerPreview && officeOwnerPreview.id !== character?.id) {
         EventBus.emit("player:joined", {
