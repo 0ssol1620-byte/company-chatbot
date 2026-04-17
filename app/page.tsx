@@ -969,6 +969,7 @@ function GamePageInner() {
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
+      if (event.button !== 0) return;
       const target = event.target as HTMLElement | null;
       if (!target?.closest("[data-roster-menu-root]") && !target?.closest("[data-roster-action-menu-root]")) {
         setShowRosterMenu(null);
