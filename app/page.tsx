@@ -1098,9 +1098,26 @@ function GamePageInner() {
       channel: getOfficeChannel(currentOfficeIdRef.current),
     }).catch(() => {});
 
-    const officeRecord = target.officeRecord ?? await getPlayerOffice(target.officeId);
+    let officeRecord = target.officeRecord ?? await getPlayerOffice(target.officeId);
     if (!officeRecord) {
-      return false;
+      try {
+        const response = await fetch("/assets/small-office-map.json");
+        const mapJson = await response.json();
+        officeRecord = {
+          office_id: target.officeId,
+          owner_player_id: target.ownerPlayerId,
+          office_name: target.officeName ?? getDefaultOfficeName(target.ownerPlayerName),
+          map_data: mapJson,
+          map_config: {
+            spawnCol: mapJson.spawnCol ?? 10,
+            spawnRow: mapJson.spawnRow ?? 7,
+          },
+          npcs: [],
+        } satisfies PlayerOfficeRecord;
+        await upsertPlayerOffice(officeRecord).catch(() => {});
+      } catch {
+        return false;
+      }
     }
 
     const seed = buildOfficeSnapshotSeedFromRecord({
