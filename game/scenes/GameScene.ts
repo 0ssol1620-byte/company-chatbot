@@ -894,9 +894,21 @@ export class GameScene extends Phaser.Scene {
   private mapConfigSpawnCol: number | null = null;
   private mapConfigSpawnRow: number | null = null;
   private reportWaitMs = 20000;
+  private eventBusUnsubscribers: Array<() => void> = [];
 
   constructor() {
     super({ key: "GameScene" });
+  }
+
+  private bindEventBus(event: string, listener: (...args: any[]) => void): void {
+    EventBus.on(event, listener);
+    this.eventBusUnsubscribers.push(() => EventBus.off(event, listener));
+  }
+
+  private releaseEventBusListeners(): void {
+    for (const unsubscribe of this.eventBusUnsubscribers.splice(0)) {
+      unsubscribe();
+    }
   }
 
   private applyMainCameraBounds(mapWidth: number, mapHeight: number): void {
@@ -1222,40 +1234,40 @@ export class GameScene extends Phaser.Scene {
     });
 
     // Dialog events
-    EventBus.on("dialog:open", () => {
+    this.bindEventBus("dialog:open", () => {
       this.dialogOpen = true;
     });
-    EventBus.on("dialog:close", () => {
+    this.bindEventBus("dialog:close", () => {
       this.dialogOpen = false;
     });
 
     // Placement mode events
-    EventBus.on("placement-mode-start", () => { this.placementMode = true; });
-    EventBus.on("placement-mode-end", () => {
+    this.bindEventBus("placement-mode-start", () => { this.placementMode = true; });
+    this.bindEventBus("placement-mode-end", () => {
       this.placementMode = false;
       this.placementHighlight?.destroy();
       this.placementHighlight = null;
     });
 
     // Spawn set mode events
-    EventBus.on("spawn-set-mode-start", () => { this.spawnSetMode = true; });
-    EventBus.on("spawn-set-mode-end", () => {
+    this.bindEventBus("spawn-set-mode-start", () => { this.spawnSetMode = true; });
+    this.bindEventBus("spawn-set-mode-end", () => {
       this.spawnSetMode = false;
       this.spawnHighlight?.destroy();
       this.spawnHighlight = null;
     });
-    EventBus.on("task-automation-updated", (data: { reportWaitSeconds?: number }) => {
+    this.bindEventBus("task-automation-updated", (data: { reportWaitSeconds?: number }) => {
       if (typeof data.reportWaitSeconds === "number") {
         this.reportWaitMs = Math.max(5000, data.reportWaitSeconds * 1000);
       }
     });
-    EventBus.on("owner-status", (data: { isOwner: boolean }) => { this.isChannelOwner = data.isOwner; });
+    this.bindEventBus("owner-status", (data: { isOwner: boolean }) => { this.isChannelOwner = data.isOwner; });
 
     // Map editor toggle from toolbar
-    EventBus.on("toggle-editor", () => this.toggleEditor());
+    this.bindEventBus("toggle-editor", () => this.toggleEditor());
 
     // React tile picker → GameScene stamp selection
-    EventBus.on("editor:select-stamp", (data: { gid: number; layer: string }) => {
+    this.bindEventBus("editor:select-stamp", (data: { gid: number; layer: string }) => {
       this.selectedStampGid = data.gid;
       this.selectedStampLayer = (data.layer || "floor") as "floor" | "walls" | "foreground";
       this.editorObjectMode = false; // switch away from object placement
@@ -1264,12 +1276,12 @@ export class GameScene extends Phaser.Scene {
     });
 
     // Save from React sidebar button
-    EventBus.on("editor:save-map", () => {
+    this.bindEventBus("editor:save-map", () => {
       if (this.editorMode) this.saveMap();
     });
 
     // Teleport to another player's position (local tab players)
-    EventBus.on("teleport-to-player", (data: { playerId: string }) => {
+    this.bindEventBus("teleport-to-player", (data: { playerId: string }) => {
       const remote = this.remotePlayers.get(data.playerId);
       if (remote && this.player) {
         this.player.setPosition(remote.targetX, remote.targetY);
@@ -1277,14 +1289,14 @@ export class GameScene extends Phaser.Scene {
     });
 
     // Teleport to absolute world position (used for cross-machine Supabase players)
-    EventBus.on("teleport-to-position", (data: { x: number; y: number }) => {
+    this.bindEventBus("teleport-to-position", (data: { x: number; y: number }) => {
       if (this.player) {
         this.player.setPosition(data.x, data.y);
       }
     });
 
     // Remote player sync from React/Supabase presence
-    EventBus.on("player:joined", (data: { playerId: string; name: string; appearance: unknown; position?: { x: number; y: number }; offline?: boolean }) => {
+    this.bindEventBus("player:joined", (data: { playerId: string; name: string; appearance: unknown; position?: { x: number; y: number }; offline?: boolean }) => {
       const joined = data;
       const position = joined.position ?? { x: TILE_SIZE * 10, y: TILE_SIZE * 7 };
       const existing = this.remotePlayers.get(joined.playerId);
@@ -1303,14 +1315,14 @@ export class GameScene extends Phaser.Scene {
         offline: joined.offline,
       });
     });
-    EventBus.on("player:left", (data: { playerId: string }) => {
+    this.bindEventBus("player:left", (data: { playerId: string }) => {
       const remote = this.remotePlayers.get(data.playerId);
       if (remote) {
         remote.destroy();
         this.remotePlayers.delete(data.playerId);
       }
     });
-    EventBus.on("player:moved", (data: { playerId: string; x: number; y: number; offline?: boolean }) => {
+    this.bindEventBus("player:moved", (data: { playerId: string; x: number; y: number; offline?: boolean }) => {
       const remote = this.remotePlayers.get(data.playerId);
       if (remote) {
         remote.updatePosition(data.x, data.y, "down", "idle", data.offline);
@@ -1318,7 +1330,7 @@ export class GameScene extends Phaser.Scene {
     });
 
     // Editor zoom control from React panel
-    EventBus.on("editor:set-zoom", (data: { zoom: number }) => {
+    this.bindEventBus("editor:set-zoom", (data: { zoom: number }) => {
       const z = Math.max(0.5, Math.min(4, data.zoom));
       this.cameras.main.setZoom(z);
       this.applyMainCameraBounds(this.currentMapPixelWidth, this.currentMapPixelHeight);
@@ -1332,7 +1344,7 @@ export class GameScene extends Phaser.Scene {
     });
 
     // Editor grid visibility toggle
-    EventBus.on("editor:toggle-grid", (data: { visible: boolean }) => {
+    this.bindEventBus("editor:toggle-grid", (data: { visible: boolean }) => {
       if (this.gridOverlay) {
         if (data.visible) this.drawGrid();
         else this.gridOverlay.clear();
@@ -1340,23 +1352,23 @@ export class GameScene extends Phaser.Scene {
     });
 
     // Local NPC spawn/remove (from own hire/fire actions)
-    EventBus.on("npc:spawn-local", (raw: { id: string; name: string; positionX: number; positionY: number; direction?: string; appearance?: unknown }) => {
+    this.bindEventBus("npc:spawn-local", (raw: { id: string; name: string; positionX: number; positionY: number; direction?: string; appearance?: unknown }) => {
       const npcData: NpcData = { ...raw, direction: raw.direction || "down" };
       if (this.npcSprites.some(n => n.id === npcData.id)) return;
       const npc = new NpcSprite(this, npcData);
       this.npcSprites.push(npc);
       this.npcTilePositions.add(`${npcData.positionX},${npcData.positionY}`);
     });
-    EventBus.on("npc:remove-local", (data: { npcId: string }) => {
+    this.bindEventBus("npc:remove-local", (data: { npcId: string }) => {
       this.removeNpcById(data.npcId);
     });
-    EventBus.on("npc:update-local", (data: { npcId: string; name?: string; direction?: string; appearance?: unknown }) => {
+    this.bindEventBus("npc:update-local", (data: { npcId: string; name?: string; direction?: string; appearance?: unknown }) => {
       const npc = this.npcSprites.find(n => n.id === data.npcId);
       if (!npc) return;
       npc.updateFromData(data);
     });
 
-    EventBus.on("npc:start-move", (data: { npcId: string; targetCol: number; targetRow: number; message?: string }) => {
+    this.bindEventBus("npc:start-move", (data: { npcId: string; targetCol: number; targetRow: number; message?: string }) => {
       const npc = this.npcSprites.find(n => n.id === data.npcId);
       if (!npc || npc.moveState !== "idle") return;
       this.npcTilePositions.delete(`${npc.homeCol},${npc.homeRow}`);
@@ -1369,7 +1381,7 @@ export class GameScene extends Phaser.Scene {
       );
     });
 
-    EventBus.on("npc:call-to-player", (data: {
+    this.bindEventBus("npc:call-to-player", (data: {
       npcId: string;
       message?: string;
       reportId?: string;
@@ -1423,7 +1435,7 @@ export class GameScene extends Phaser.Scene {
     });
 
     // NPC finished responding — if far from player, walk to deliver the response
-    EventBus.on("npc:deliver-response", (data: { npcId: string; npcName: string }) => {
+    this.bindEventBus("npc:deliver-response", (data: { npcId: string; npcName: string }) => {
       if (!this.player) return;
       const npc = this.npcSprites.find(n => n.id === data.npcId);
       if (!npc) return;
@@ -1451,7 +1463,7 @@ export class GameScene extends Phaser.Scene {
       );
     });
 
-    EventBus.on("npc:start-return", (data: { npcId: string }) => {
+    this.bindEventBus("npc:start-return", (data: { npcId: string }) => {
       const npc = this.npcSprites.find(n => n.id === data.npcId);
       if (!npc || npc.moveState !== "waiting") return;
       npc.returnToHome(
@@ -1460,7 +1472,7 @@ export class GameScene extends Phaser.Scene {
       );
     });
 
-    EventBus.on("npc:approach-and-interact", (data: { npcId: string; npcName?: string }) => {
+    this.bindEventBus("npc:approach-and-interact", (data: { npcId: string; npcName?: string }) => {
       this.approachNpcAndInteract(data.npcId, data.npcName);
     });
 
@@ -1726,7 +1738,7 @@ export class GameScene extends Phaser.Scene {
 
     // Listen for spritesheet texture from React (only process once)
     let playerTextureLoaded = false;
-    EventBus.on("spritesheet-ready", (dataUrl: string) => {
+    this.bindEventBus("spritesheet-ready", (dataUrl: string) => {
       if (playerTextureLoaded) return;
       playerTextureLoaded = true;
       this.loadPlayerTexture(dataUrl);
@@ -1749,21 +1761,21 @@ export class GameScene extends Phaser.Scene {
         this.joinMultiplayer(this.player.x, this.player.y);
       }
     };
-    EventBus.on("multiplayer-ready", handleMultiplayerReady);
+    this.bindEventBus("multiplayer-ready", handleMultiplayerReady);
 
     // Speech bubble listeners
-    EventBus.on("chat:bubble", (data: { senderId: string }) => {
+    this.bindEventBus("chat:bubble", (data: { senderId: string }) => {
       this.showPlayerBubble(data.senderId);
     });
-    EventBus.on("npc:bubble", (data: { npcId: string; text?: string }) => {
+    this.bindEventBus("npc:bubble", (data: { npcId: string; text?: string }) => {
       this.showNpcBubbleIcon(data.npcId, data.text);
     });
-    EventBus.on("npc:bubble-clear", (data: { npcId: string }) => {
+    this.bindEventBus("npc:bubble-clear", (data: { npcId: string }) => {
       this.clearNpcBubble(data.npcId);
     });
 
     // Respond to position requests from React (for save-on-leave)
-    EventBus.on("request-player-position", () => {
+    this.bindEventBus("request-player-position", () => {
       if (this.player) {
         EventBus.emit("player-position-response", { x: this.player.x, y: this.player.y });
       }
@@ -1772,26 +1784,11 @@ export class GameScene extends Phaser.Scene {
     // Tell React the scene is ready
     EventBus.emit("scene-ready");
 
-    // Clean up GameScene's own EventBus listeners when this scene is destroyed.
-    // This prevents stale listeners from accumulating across game recreations
-    // (e.g. React Strict Mode double-invocation).
+    // Clean up only this scene's own EventBus listeners when destroyed.
+    // Never remove all listeners globally — that can break the freshly mounted scene
+    // during office switches/remounts.
     this.events.once("destroy", () => {
-      const gameSceneEvents = [
-        "dialog:open", "dialog:close",
-        "placement-mode-start", "placement-mode-end",
-        "spawn-set-mode-start", "spawn-set-mode-end",
-        "task-automation-updated",
-        "owner-status",
-        "npc:spawn-local", "npc:remove-local", "npc:update-local",
-        "npc:start-move", "npc:call-to-player",
-        "npc:deliver-response", "npc:start-return", "npc:approach-and-interact",
-        "spritesheet-ready", "multiplayer-ready",
-        "chat:bubble", "npc:bubble", "npc:bubble-clear",
-        "request-player-position",
-      ];
-      for (const ev of gameSceneEvents) {
-        EventBus.removeAllListeners(ev);
-      }
+      this.releaseEventBusListeners();
     });
 
     // Also re-request multiplayer in case it was already sent before we registered

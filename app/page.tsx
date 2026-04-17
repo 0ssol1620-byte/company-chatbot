@@ -1241,12 +1241,12 @@ function GamePageInner() {
       id: character.id,
       name: character.name,
       appearance: character.appearance,
-      office_id: target.officeId,
-      office_name: target.officeName ?? officeRecord.office_name,
-      office_owner_id: target.ownerPlayerId,
+      office_id: homeOfficeId,
+      office_name: homeOfficeName,
+      office_owner_id: character.id,
     }).catch(() => {});
     return true;
-  }, [applyOfficeSeed, character, persistOfficeSnapshot]);
+  }, [applyOfficeSeed, character, homeOfficeId, homeOfficeName, persistOfficeSnapshot]);
 
   const handleReturnToMyOffice = useCallback(async () => {
     if (!character) return;
