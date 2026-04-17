@@ -24,18 +24,63 @@ import { sanitizeNpcResponseText } from "@/lib/task-block-utils.js";
 import { LocalMultiplayer, getTabId } from "@/lib/local-multiplayer";
 import { SupabaseMultiplayer, type PlayerPresence } from "@/lib/supabase-multiplayer";
 import {
-  getCharacter, getNpcs, addNpc, updateNpc, removeNpc,
-  getTasks, upsertTask, removeTask, removeTasksForNpc,
-  getNpcChat, appendNpcChat, clearNpcChat,
-  getMeetings, savePlayerPosition, getPlayerPosition,
-  getChannel, saveChannel,
+  getCharacter,
+  getNpcs,
+  addNpc,
+  updateNpc,
+  removeNpc,
+  getTasks,
+  upsertTask,
+  removeTask,
+  removeTasksForNpc,
+  getNpcChat,
+  appendNpcChat,
+  clearNpcChat,
+  getMeetings,
+  savePlayerPosition,
+  getPlayerPosition,
+  getChannel,
+  saveChannel,
+  getOfficeChannel,
+  saveOfficeChannel,
+  getOfficeNpcs,
+  addOfficeNpc,
+  updateOfficeNpc,
+  removeOfficeNpc,
+  saveOfficeNpcs,
+  getOfficeTasks,
+  upsertOfficeTask,
+  removeOfficeTask,
+  removeOfficeTasksForNpc,
+  saveOfficeTasks,
+  getOfficePlayerPosition,
+  saveOfficePlayerPosition,
+  migrateLegacyOfficeStorage,
   type LocalNpc,
+  type LocalTask,
+  type LocalChannel,
 } from "@/lib/local-store";
 import {
-  upsertPlayer, updatePlayerPosition, getOfflinePlayers, sendOfflineMessage,
-  getUnreadMessages, markMessagesRead,
-  type PlayerRecord, type OfflineMessage,
+  upsertPlayer,
+  updatePlayerPosition,
+  getOfflinePlayers,
+  sendOfflineMessage,
+  getUnreadMessages,
+  markMessagesRead,
+  getPlayerById,
+  type PlayerRecord,
+  type OfflineMessage,
 } from "@/lib/player-registry";
+import { getPlayerOffice, upsertPlayerOffice, type PlayerOfficeRecord } from "@/lib/office-registry";
+import {
+  OFFICE_MAP_VERSION,
+  buildOfficeRuntimeState,
+  buildPendingOfficeChannelData,
+  buildPlayerOfficeRecord,
+  buildOfficeSnapshotSeedFromRecord,
+  getDefaultOfficeName,
+  getOfficeIdForPlayer,
+} from "@/lib/office-state";
 
 const APP_VERSION = "2026.4.6";
 const BUG_REPORT_BASE_URL = "https://github.com/0ssol1620-byte/company-chatbot/issues/new";
@@ -245,6 +290,13 @@ function GamePageInner() {
 
   // Owner & NPC management state — always true in local mode
   const [isOwner, setIsOwner] = useState(true);
+  const [currentOfficeId, setCurrentOfficeId] = useState<string>("default");
+  const [currentOfficeName, setCurrentOfficeName] = useState<string>("Office");
+  const [currentOfficeOwnerId, setCurrentOfficeOwnerId] = useState<string>("");
+  const [currentOfficeOwnerName, setCurrentOfficeOwnerName] = useState<string>("");
+  const [homeOfficeId, setHomeOfficeId] = useState<string>("default");
+  const [homeOfficeName, setHomeOfficeName] = useState<string>("Office");
+  const [visitingOfficeNotice, setVisitingOfficeNotice] = useState<string | null>(null);
   const [showHireModal, setShowHireModal] = useState(false);
   const [placementMode, setPlacementMode] = useState(false);
   const [spawnSetMode, setSpawnSetMode] = useState(false);
@@ -275,6 +327,83 @@ function GamePageInner() {
   const supabaseMultiplayer = useRef<SupabaseMultiplayer | null>(null);
   // Track last known world positions of remote players (playerId → {x, y})
   const remotePlayerPositions = useRef<Map<string, { x: number; y: number }>>(new Map());
+
+  const getScopedNpcs = useCallback((officeId = currentOfficeId) => getOfficeNpcs(officeId), [currentOfficeId]);
+  const getScopedTasks = useCallback((officeId = currentOfficeId) => getOfficeTasks(officeId), [currentOfficeId]);
+
+  const persistOfficeSnapshot = useCallback(async (params: {
+    officeId: string;
+    officeName: string;
+    ownerPlayerId: string;
+    ownerPlayerName: string;
+    channel?: LocalChannel | null;
+  }) => {
+    const channel = params.channel ?? getOfficeChannel(params.officeId) ?? null;
+    const npcs = getOfficeNpcs(params.officeId);
+    const tasks = getOfficeTasks(params.officeId);
+    const savedPosition = getOfficePlayerPosition(params.officeId);
+
+    await upsertPlayerOffice(buildPlayerOfficeRecord({
+      officeId: params.officeId,
+      officeName: params.officeName,
+      ownerPlayerId: params.ownerPlayerId,
+      ownerPlayerName: params.ownerPlayerName,
+      channel,
+      npcs,
+      tasks,
+      savedPosition,
+    }));
+  }, []);
+
+  const applyOfficeSeed = useCallback((seed: {
+    officeId: string;
+    officeName: string;
+    ownerPlayerId: string;
+    ownerPlayerName: string;
+    channel: LocalChannel | null;
+    npcs: LocalNpc[];
+    tasks: LocalTask[];
+    savedPosition: { x: number; y: number } | null;
+  }, currentPlayer: Character) => {
+    const runtime = buildOfficeRuntimeState({
+      officeId: seed.officeId,
+      officeName: seed.officeName,
+      ownerPlayerId: seed.ownerPlayerId,
+      ownerPlayerName: seed.ownerPlayerName,
+      currentPlayerId: currentPlayer.id,
+      currentPlayerName: currentPlayer.name,
+    });
+
+    setCurrentOfficeId(runtime.officeId);
+    setCurrentOfficeName(runtime.officeName);
+    setCurrentOfficeOwnerId(runtime.ownerPlayerId);
+    setCurrentOfficeOwnerName(runtime.ownerPlayerName);
+    setIsOwner(runtime.isOwner);
+    setVisitingOfficeNotice(runtime.isVisiting ? `${runtime.ownerPlayerName} · ${runtime.officeName}` : null);
+
+    const pending = buildPendingOfficeChannelData({
+      officeId: runtime.officeId,
+      channel: seed.channel,
+      savedPosition: seed.savedPosition,
+    });
+
+    setPendingChannelData(pending);
+    setGameChannelData(pending);
+    setChannelNpcs(seed.npcs.map((npc) => ({ id: npc.id, name: npc.name, appearance: npc.appearance })));
+    setAllTasks(seed.tasks);
+    remotePlayerPositions.current.clear();
+    EventBus.emit("channel-data-ready", pending);
+  }, []);
+
+  const currentOfficeIdRef = useRef(currentOfficeId);
+  const currentOfficeNameRef = useRef(currentOfficeName);
+  const currentOfficeOwnerIdRef = useRef(currentOfficeOwnerId);
+  const currentOfficeOwnerNameRef = useRef(currentOfficeOwnerName);
+
+  useEffect(() => { currentOfficeIdRef.current = currentOfficeId; }, [currentOfficeId]);
+  useEffect(() => { currentOfficeNameRef.current = currentOfficeName; }, [currentOfficeName]);
+  useEffect(() => { currentOfficeOwnerIdRef.current = currentOfficeOwnerId; }, [currentOfficeOwnerId]);
+  useEffect(() => { currentOfficeOwnerNameRef.current = currentOfficeOwnerName; }, [currentOfficeOwnerName]);
 
   const openBugReport = useCallback(() => {
     const userAgent = typeof window !== "undefined" ? window.navigator.userAgent : "unknown";
@@ -354,7 +483,7 @@ function GamePageInner() {
       EventBus.off("player-position-response", syncHandler);
 
       const pos = freshPos ?? playerPositionRef.current;
-      if (pos) savePlayerPosition({ x: Math.round(pos.x), y: Math.round(pos.y) });
+      if (pos) saveOfficePlayerPosition(currentOfficeIdRef.current, { x: Math.round(pos.x), y: Math.round(pos.y) });
     };
     window.addEventListener("beforeunload", handleUnload);
 
@@ -374,40 +503,40 @@ function GamePageInner() {
   }, []);
 
   const deleteTask = useCallback((taskId: string) => {
-    removeTask(taskId);
+    removeOfficeTask(currentOfficeId, taskId);
     setAllTasks(prev => prev.filter(t => t.id !== taskId));
-  }, []);
+  }, [currentOfficeId]);
 
   const requestTaskReport = useCallback((taskId: string) => {
     showToastNotification(`task-request-${taskId}`, t("task.requestReportQueued"));
   }, [showToastNotification, t]);
 
   const resumeTask = useCallback((taskId: string) => {
-    const tasks = getTasks();
+    const tasks = getScopedTasks();
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
     const updated = { ...task, status: "in_progress" as const, updatedAt: new Date().toISOString() };
-    upsertTask(updated);
+    upsertOfficeTask(currentOfficeId, updated);
     setAllTasks(prev => prev.map(t => t.id === taskId ? updated : t));
     showToastNotification(`task-resume-${taskId}`, t("task.resumeQueued"));
-  }, [showToastNotification, t]);
+  }, [currentOfficeId, getScopedTasks, showToastNotification, t]);
 
   const completeTask = useCallback((taskId: string) => {
-    const tasks = getTasks();
+    const tasks = getScopedTasks();
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
     const updated = { ...task, status: "complete" as const, updatedAt: new Date().toISOString() };
-    upsertTask(updated);
+    upsertOfficeTask(currentOfficeId, updated);
     setAllTasks(prev => prev.map(t => t.id === taskId ? updated : t));
     showToastNotification(`task-complete-${taskId}`, t("task.completeQueued"));
-  }, [showToastNotification, t]);
+  }, [currentOfficeId, getScopedTasks, showToastNotification, t]);
 
   const refreshChannelTasks = useCallback(() => {
-    setAllTasks(getTasks());
-  }, []);
+    setAllTasks(getScopedTasks());
+  }, [getScopedTasks]);
 
   // -----------------------------------------------------------------------
-  // Initialization: load character from localStorage, set up LocalMultiplayer
+  // Initialization: load character from localStorage, set up office state + LocalMultiplayer
   // -----------------------------------------------------------------------
   useEffect(() => {
     const char = getCharacter();
@@ -416,107 +545,186 @@ function GamePageInner() {
       return;
     }
 
+    const homeId = getOfficeIdForPlayer(char.id);
+    const homeName = getDefaultOfficeName(char.name);
+
     setCharacter(char);
     characterNameRef.current = char.name;
-    setIsOwner(true);
+    setHomeOfficeId(homeId);
+    setHomeOfficeName(homeName);
+    currentOfficeIdRef.current = homeId;
+    currentOfficeNameRef.current = homeName;
+    currentOfficeOwnerIdRef.current = char.id;
+    currentOfficeOwnerNameRef.current = char.name;
 
-    // Load office map then hand off to GameScene
-    // Priority: 1) user-edited map in localStorage, 2) bundled static JSON
-    // MAP_VERSION bumped to 2 to bust cached Dante Labs tiles
-    const MAP_VERSION = 2;
-    const savedPos = getPlayerPosition();
-    const savedChannel = getChannel();
-    if (savedChannel?.mapData && savedChannel.mapVersion === MAP_VERSION) {
-      const channelData: PendingChannelData = {
-        channelId: "default",
-        mapData: savedChannel.mapData,
-        tiledJson: (savedChannel.mapData as Record<string, unknown>)?.tiledJson as object | undefined,
-        mapConfig: savedChannel.mapConfig ?? { spawnCol: 10, spawnRow: 7 },
-        savedPosition: savedPos,
-        reportWaitSeconds: 20,
-      };
-      setPendingChannelData(channelData);
-      setGameChannelData(channelData);
-      EventBus.emit("channel-data-ready");
-    } else {
-      fetch("/assets/small-office-map.json")
-        .then((r) => r.json())
-        .then((mapJson) => {
-          const nextPendingChannelData: PendingChannelData = {
-            channelId: "default",
+    migrateLegacyOfficeStorage(homeId);
+
+    let cancelled = false;
+
+    const loadInitialOffice = async () => {
+      const savedPos = getOfficePlayerPosition(homeId) ?? getPlayerPosition();
+      const savedChannel = getOfficeChannel(homeId) ?? getChannel();
+      const savedNpcs = getOfficeNpcs(homeId);
+      const savedTasks = getOfficeTasks(homeId);
+
+      if (savedChannel?.mapData && savedChannel.mapVersion === OFFICE_MAP_VERSION) {
+        if (cancelled) return;
+        applyOfficeSeed({
+          officeId: homeId,
+          officeName: savedChannel.name || homeName,
+          ownerPlayerId: char.id,
+          ownerPlayerName: char.name,
+          channel: savedChannel,
+          npcs: savedNpcs,
+          tasks: savedTasks,
+          savedPosition: savedPos,
+        }, char);
+        await persistOfficeSnapshot({
+          officeId: homeId,
+          officeName: savedChannel.name || homeName,
+          ownerPlayerId: char.id,
+          ownerPlayerName: char.name,
+          channel: savedChannel,
+        }).catch(() => {});
+      } else {
+        try {
+          const response = await fetch("/assets/small-office-map.json");
+          const mapJson = await response.json();
+          if (cancelled) return;
+          const fallbackChannel: LocalChannel = {
+            id: homeId,
+            name: homeName,
             mapData: mapJson,
-            tiledJson: mapJson.tiledJson ?? undefined,
+            tiledJson: mapJson.tiledJson ?? null,
             mapConfig: {
               spawnCol: mapJson.spawnCol ?? 10,
               spawnRow: mapJson.spawnRow ?? 7,
             },
-            savedPosition: savedPos,
-            reportWaitSeconds: 20,
+            mapVersion: OFFICE_MAP_VERSION,
           };
-          setPendingChannelData(nextPendingChannelData);
-          setGameChannelData(nextPendingChannelData);
-          EventBus.emit("channel-data-ready");
-        })
-        .catch(() => {
-          // Fallback: empty map so scene doesn't hang
-          const fallback: PendingChannelData = {
-            channelId: "default",
+          saveOfficeChannel(homeId, fallbackChannel);
+          applyOfficeSeed({
+            officeId: homeId,
+            officeName: homeName,
+            ownerPlayerId: char.id,
+            ownerPlayerName: char.name,
+            channel: fallbackChannel,
+            npcs: savedNpcs,
+            tasks: savedTasks,
+            savedPosition: savedPos,
+          }, char);
+          await persistOfficeSnapshot({
+            officeId: homeId,
+            officeName: homeName,
+            ownerPlayerId: char.id,
+            ownerPlayerName: char.name,
+            channel: fallbackChannel,
+          }).catch(() => {});
+        } catch {
+          if (cancelled) return;
+          const fallbackChannel: LocalChannel = {
+            id: homeId,
+            name: homeName,
             mapData: null,
-            tiledJson: undefined,
+            tiledJson: null,
             mapConfig: { spawnCol: 5, spawnRow: 5 },
-            savedPosition: savedPos,
-            reportWaitSeconds: 20,
+            mapVersion: OFFICE_MAP_VERSION,
           };
-          setPendingChannelData(fallback);
-          setGameChannelData(fallback);
-        });
-    }
+          saveOfficeChannel(homeId, fallbackChannel);
+          applyOfficeSeed({
+            officeId: homeId,
+            officeName: homeName,
+            ownerPlayerId: char.id,
+            ownerPlayerName: char.name,
+            channel: fallbackChannel,
+            npcs: savedNpcs,
+            tasks: savedTasks,
+            savedPosition: savedPos,
+          }, char);
+        }
+      }
+    };
 
-    // Load NPCs and tasks
-    const npcs = getNpcs();
-    setChannelNpcs(npcs.map(n => ({ id: n.id, name: n.name, appearance: n.appearance })));
-    setAllTasks(getTasks());
-    setMeetingMinutesCount(getMeetings().length);
+    loadInitialOffice().catch(() => {
+      setError("Failed to load office data");
+    });
 
-    // Register current player in Supabase registry + check inbox
-    const charId = char.id || crypto.randomUUID();
-    upsertPlayer({ id: charId, name: char.name, appearance: char.appearance }).catch(() => {});
-    getUnreadMessages(charId).then(msgs => { if (msgs.length) setInbox(msgs); }).catch(() => {});
+    upsertPlayer({
+      id: char.id,
+      name: char.name,
+      appearance: char.appearance,
+      office_id: homeId,
+      office_name: homeName,
+      office_owner_id: char.id,
+    }).catch(() => {});
+    getUnreadMessages(char.id).then(msgs => { if (msgs.length) setInbox(msgs); }).catch(() => {});
 
-    // Set player list (just self)
     setChannelPlayers([{
       id: "__self__",
       name: char.name,
       appearance: char.appearance ?? null,
     }]);
+    setMeetingMinutesCount(getMeetings().length);
 
-    // Init LocalMultiplayer
     const tabId = getTabId();
     const lm = new LocalMultiplayer(tabId);
     localMultiplayer.current = lm;
 
-    // BroadcastChannel NPC sync listeners
     lm.on("npc:added", (data) => {
-      const npc = data as LocalNpc;
-      addNpc(npc);
-      setChannelNpcs(prev => [...prev.filter(n => n.id !== npc.id), { id: npc.id, name: npc.name, appearance: npc.appearance }]);
-      EventBus.emit("npc:spawn-local", npc);
+      const payload = data as { officeId?: string; npc: LocalNpc };
+      if (payload.officeId !== currentOfficeIdRef.current) return;
+      addOfficeNpc(payload.officeId, payload.npc);
+      setChannelNpcs(prev => [...prev.filter(n => n.id !== payload.npc.id), { id: payload.npc.id, name: payload.npc.name, appearance: payload.npc.appearance }]);
+      EventBus.emit("npc:spawn-local", payload.npc);
     });
     lm.on("npc:removed", (data) => {
-      const { npcId } = data as { npcId: string };
-      removeNpc(npcId);
-      setChannelNpcs(prev => prev.filter(n => n.id !== npcId));
-      setAllTasks(prev => prev.filter(t => t.npcId !== npcId));
+      const payload = data as { officeId?: string; npcId: string };
+      if (payload.officeId !== currentOfficeIdRef.current) return;
+      removeOfficeNpc(payload.officeId, payload.npcId);
+      setChannelNpcs(prev => prev.filter(n => n.id !== payload.npcId));
+      setAllTasks(prev => prev.filter(t => t.npcId !== payload.npcId));
     });
     lm.on("npc:updated", (data) => {
-      const { npcId, ...updates } = data as { npcId: string } & Partial<LocalNpc>;
-      updateNpc(npcId, updates);
+      const payload = data as { officeId?: string; npcId: string } & Partial<LocalNpc>;
+      if (payload.officeId !== currentOfficeIdRef.current) return;
+      const { npcId, officeId, ...updates } = payload;
+      updateOfficeNpc(officeId!, npcId, updates);
       setChannelNpcs(prev => prev.map(n => n.id === npcId ? { ...n, ...updates } : n));
     });
 
-    // Supabase Realtime — cross-machine player sync
-    const sm = new SupabaseMultiplayer(char.id || crypto.randomUUID());
+    return () => {
+      cancelled = true;
+      lm.disconnect();
+      localMultiplayer.current = null;
+    };
+  }, [applyOfficeSeed, persistOfficeSnapshot, router]);
+
+  useEffect(() => {
+    if (!character) return;
+    const canvas = document.createElement("canvas");
+    canvasRef.current = canvas;
+    compositeCharacter(canvas, character.appearance)
+      .then(() => {
+        setSpritesheetDataUrl(canvas.toDataURL("image/png"));
+        setLoading(false);
+      })
+      .catch(() => {
+        setLoading(false);
+      });
+  }, [character]);
+
+  useEffect(() => {
+    if (!character || !currentOfficeId) return;
+
+    const savedPos = getOfficePlayerPosition(currentOfficeId) ?? undefined;
+    const sm = new SupabaseMultiplayer(character.id || crypto.randomUUID(), `office:${currentOfficeId}`);
     supabaseMultiplayer.current = sm;
+    setSupabaseStatus("connecting");
+    setChannelPlayers([{
+      id: "__self__",
+      name: character.name,
+      appearance: character.appearance ?? null,
+    }]);
 
     sm.on('player:joined', (data) => {
       const p = data as PlayerPresence;
@@ -532,9 +740,8 @@ function GamePageInner() {
       const p = data as { playerId: string };
       setChannelPlayers(prev => {
         const next = prev.filter(x => x.id !== p.playerId);
-        // Refresh offline list now that someone left
         const onlineIds = next.map(x => x.id).filter(id => id !== '__self__');
-        getOfflinePlayers([charId, ...onlineIds]).then(setOfflinePlayers).catch(() => {});
+        getOfflinePlayers([character.id, ...onlineIds]).then(setOfflinePlayers).catch(() => {});
         return next;
       });
       EventBus.emit('player:left', p);
@@ -548,17 +755,14 @@ function GamePageInner() {
         appearance: (presences[0]?.appearance as CharacterAppearance | LegacyCharacterAppearance | null) || null,
         position: presences[0]?.position,
       }));
-      // Seed last-known positions from presence data
       players.forEach(p => {
         if (p.position) remotePlayerPositions.current.set(p.id, p.position);
       });
       setChannelPlayers(prev => {
-        // Keep self, merge others
         const self = prev.find(p => p.id === '__self__');
-        const others = players.filter(p => p.id !== (char.id || ''));
+        const others = players.filter(p => p.id !== character.id);
         const next = self ? [self, ...others] : others;
-        // Compute offline players = registry minus current online
-        const onlineIds = [charId, ...others.map(x => x.id)];
+        const onlineIds = [character.id, ...others.map(x => x.id)];
         getOfflinePlayers(onlineIds).then(setOfflinePlayers).catch(() => {});
         return next;
       });
@@ -567,7 +771,6 @@ function GamePageInner() {
     sm.on('chat:message', (data) => {
       const msg = data as ChannelChatMessage;
       setChannelMessages(prev => [...prev, msg]);
-      // Increment unread badge if chat is closed (M6)
       if (!channelChatOpenRef.current) {
         setUnreadChatCount(c => c + 1);
       }
@@ -580,32 +783,44 @@ function GamePageInner() {
     });
 
     sm.subscribe({
-      playerId: char.id || 'unknown',
-      name: char.name,
-      appearance: char.appearance,
+      playerId: character.id || 'unknown',
+      name: character.name,
+      appearance: character.appearance,
+      position: savedPos,
     })
       .then(() => setSupabaseStatus("connected"))
       .catch(() => setSupabaseStatus("error"));
 
-    // Composite player sprite
-    const canvas = document.createElement("canvas");
-    canvasRef.current = canvas;
-    compositeCharacter(canvas, char.appearance)
-      .then(() => {
-        setSpritesheetDataUrl(canvas.toDataURL("image/png"));
-        setLoading(false);
-      })
-      .catch(() => {
-        setLoading(false);
-      });
-
     return () => {
-      lm.disconnect();
-      localMultiplayer.current = null;
       sm.disconnect();
-      supabaseMultiplayer.current = null;
+      if (supabaseMultiplayer.current === sm) {
+        supabaseMultiplayer.current = null;
+      }
     };
-  }, [router]);
+  }, [character, currentOfficeId]);
+
+  useEffect(() => {
+    if (!character || !currentOfficeId) return;
+    upsertPlayer({
+      id: character.id,
+      name: character.name,
+      appearance: character.appearance,
+      office_id: currentOfficeId,
+      office_name: currentOfficeName,
+      office_owner_id: currentOfficeOwnerId || character.id,
+    }).catch(() => {});
+  }, [character, currentOfficeId, currentOfficeName, currentOfficeOwnerId]);
+
+  useEffect(() => {
+    if (!character || !currentOfficeId) return;
+    persistOfficeSnapshot({
+      officeId: currentOfficeId,
+      officeName: currentOfficeName,
+      ownerPlayerId: currentOfficeOwnerId || character.id,
+      ownerPlayerName: currentOfficeOwnerName || character.name,
+      channel: getOfficeChannel(currentOfficeId),
+    }).catch(() => {});
+  }, [allTasks, channelNpcs, character, currentOfficeId, currentOfficeName, currentOfficeOwnerId, currentOfficeOwnerName, persistOfficeSnapshot]);
 
   useEffect(() => {
     if (!showTaskBoard) return;
@@ -857,30 +1072,126 @@ function GamePageInner() {
     closeRosterMenus();
   }, [closeRosterMenus]);
 
-  // H2: Teleport to another player's position
-  const handleVisitPlayer = useCallback((playerId: string) => {
-    // Try Supabase-tracked world position first (cross-machine players)
-    const pos = remotePlayerPositions.current.get(playerId);
-    if (pos) {
-      EventBus.emit("teleport-to-position", pos);
-    } else {
-      // Fall back to LocalMultiplayer (same-browser tab players)
-      EventBus.emit("teleport-to-player", { playerId });
-    }
-    closeRosterMenus();
-  }, [closeRosterMenus]);
+  const switchToOffice = useCallback(async (target: {
+    officeId: string;
+    officeName?: string | null;
+    ownerPlayerId: string;
+    ownerPlayerName: string;
+    preferredSavedPosition?: { x: number; y: number } | null;
+    officeRecord?: PlayerOfficeRecord | null;
+  }) => {
+    if (!character) return false;
 
-  // Visit offline player: teleport to their last known position + open message dialog
-  const handleVisitOfflinePlayer = useCallback((player: PlayerRecord) => {
-    if (player.last_position) {
-      EventBus.emit("teleport-to-position", player.last_position);
-    } else {
-      showToastNotification(`offline-no-pos-${player.id}`, t("game.offlineNoPosition"));
+    const currentPosition = playerPositionRef.current;
+    if (currentPosition) {
+      saveOfficePlayerPosition(currentOfficeIdRef.current, {
+        x: Math.round(currentPosition.x),
+        y: Math.round(currentPosition.y),
+      });
     }
-    setOfflineMsgTarget({ id: player.id, name: player.name });
-    setOfflineMsgText("");
+
+    await persistOfficeSnapshot({
+      officeId: currentOfficeIdRef.current,
+      officeName: currentOfficeNameRef.current,
+      ownerPlayerId: currentOfficeOwnerIdRef.current || character.id,
+      ownerPlayerName: currentOfficeOwnerNameRef.current || character.name,
+      channel: getOfficeChannel(currentOfficeIdRef.current),
+    }).catch(() => {});
+
+    const officeRecord = target.officeRecord ?? await getPlayerOffice(target.officeId);
+    if (!officeRecord) {
+      return false;
+    }
+
+    const seed = buildOfficeSnapshotSeedFromRecord({
+      office: officeRecord,
+      ownerPlayerName: target.ownerPlayerName,
+      tasks: getOfficeTasks(target.officeId),
+      savedPosition: target.preferredSavedPosition ?? getOfficePlayerPosition(target.officeId),
+    });
+
+    saveOfficeChannel(target.officeId, seed.channel!);
+    saveOfficeNpcs(target.officeId, seed.npcs);
+    saveOfficeTasks(target.officeId, seed.tasks);
+    applyOfficeSeed({
+      officeId: target.officeId,
+      officeName: target.officeName ?? officeRecord.office_name,
+      ownerPlayerId: target.ownerPlayerId,
+      ownerPlayerName: target.ownerPlayerName,
+      channel: seed.channel,
+      npcs: seed.npcs,
+      tasks: seed.tasks,
+      savedPosition: seed.savedPosition,
+    }, character);
+
+    setChannelMessages([]);
+    setUnreadChatCount(0);
+    await upsertPlayer({
+      id: character.id,
+      name: character.name,
+      appearance: character.appearance,
+      office_id: target.officeId,
+      office_name: target.officeName ?? officeRecord.office_name,
+      office_owner_id: target.ownerPlayerId,
+    }).catch(() => {});
+    return true;
+  }, [applyOfficeSeed, character, persistOfficeSnapshot]);
+
+  const handleReturnToMyOffice = useCallback(async () => {
+    if (!character) return;
+    const ok = await switchToOffice({
+      officeId: homeOfficeId,
+      officeName: homeOfficeName,
+      ownerPlayerId: character.id,
+      ownerPlayerName: character.name,
+      preferredSavedPosition: getOfficePlayerPosition(homeOfficeId),
+      officeRecord: await getPlayerOffice(homeOfficeId),
+    });
+    if (!ok) {
+      showToastNotification(`return-office-failed-${Date.now()}`, "Failed to load your office.");
+    }
     closeRosterMenus();
-  }, [closeRosterMenus, showToastNotification, t]);
+  }, [character, closeRosterMenus, homeOfficeId, homeOfficeName, showToastNotification, switchToOffice]);
+
+  const handleVisitPlayer = useCallback(async (playerId: string, fallbackPos?: { x: number; y: number } | null) => {
+    if (!character) return;
+    const player = await getPlayerById(playerId);
+    if (!player) {
+      showToastNotification(`visit-player-missing-${playerId}`, "Could not find that player's office.");
+      closeRosterMenus();
+      return;
+    }
+
+    const targetOfficeId = player.office_id ?? getOfficeIdForPlayer(player.id);
+    const ok = await switchToOffice({
+      officeId: targetOfficeId,
+      officeName: player.office_name ?? getDefaultOfficeName(player.name),
+      ownerPlayerId: player.office_owner_id ?? player.id,
+      ownerPlayerName: player.name,
+      preferredSavedPosition: fallbackPos ?? player.last_position,
+    });
+
+    if (!ok) {
+      showToastNotification(`visit-player-failed-${player.id}`, "Office snapshot is not available yet.");
+    }
+    closeRosterMenus();
+  }, [character, closeRosterMenus, showToastNotification, switchToOffice]);
+
+  const handleVisitOfflinePlayer = useCallback(async (player: PlayerRecord) => {
+    const targetOfficeId = player.office_id ?? getOfficeIdForPlayer(player.id);
+    const ok = await switchToOffice({
+      officeId: targetOfficeId,
+      officeName: player.office_name ?? getDefaultOfficeName(player.name),
+      ownerPlayerId: player.office_owner_id ?? player.id,
+      ownerPlayerName: player.name,
+      preferredSavedPosition: player.last_position,
+    });
+
+    if (!ok) {
+      showToastNotification(`offline-no-office-${player.id}`, "Offline office snapshot is not available yet.");
+    }
+    closeRosterMenus();
+  }, [closeRosterMenus, showToastNotification, switchToOffice]);
 
   const handleSendOfflineMessage = useCallback(async () => {
     if (!offlineMsgTarget || !offlineMsgText.trim() || !character) return;
@@ -953,7 +1264,7 @@ function GamePageInner() {
     setIsNpcStreaming(true);
 
     // Get NPC's agent config from localStorage
-    const npcs = getNpcs();
+    const npcs = getScopedNpcs();
     const npc = npcs.find(n => n.id === dialogNpc.npcId);
     if (!npc) { setIsNpcStreaming(false); return; }
 
@@ -1157,7 +1468,7 @@ function GamePageInner() {
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
-          upsertTask(localTask);
+          upsertOfficeTask(currentOfficeIdRef.current, localTask);
           setAllTasks(prev => {
             const existing = prev.findIndex(t => t.id === localTask.id);
             if (existing >= 0) { const u = [...prev]; u[existing] = localTask; return u; }
@@ -1206,6 +1517,8 @@ function GamePageInner() {
     const onPlayerMoved = (data: unknown) => {
       const { playerId, x, y } = data as { playerId: string; x: number; y: number };
       supabaseMultiplayer.current?.emit('player:moved', { playerId, x, y }).catch(() => {});
+      supabaseMultiplayer.current?.updatePresence({ position: { x, y } }).catch(() => {});
+      saveOfficePlayerPosition(currentOfficeIdRef.current, { x, y });
       // Throttled registry update
       const now = Date.now();
       if (now - positionUpdateTimerRef.current > 15_000) {
@@ -1240,11 +1553,11 @@ function GamePageInner() {
             files: pendingNpc.files ?? [],
           },
         };
-        addNpc(newNpc);
+        addOfficeNpc(currentOfficeIdRef.current, newNpc);
         setChannelNpcs(prev => [...prev, { id: newNpc.id, name: newNpc.name, appearance: newNpc.appearance }]);
         EventBus.emit("npc:spawn-local", newNpc);
         // Broadcast to other tabs
-        localMultiplayer.current?.emit("npc:added", newNpc);
+        localMultiplayer.current?.emit("npc:added", { officeId: currentOfficeIdRef.current, npc: newNpc });
       } catch (err) {
         console.error("Failed to place NPC:", err);
         showToastNotification(
@@ -1285,7 +1598,7 @@ function GamePageInner() {
   // NPC management listeners (edit / fire)
   useEffect(() => {
     const onNpcEdit = async (data: { npcId: string }) => {
-      const npcs = getNpcs();
+      const npcs = getScopedNpcs();
       const npc = npcs.find(n => n.id === data.npcId);
       if (!npc) return;
       setEditingNpc({
@@ -1303,12 +1616,12 @@ function GamePageInner() {
     const onNpcFire = async (data: { npcId: string }) => {
       if (!confirm(t("game.fireNpcConfirm"))) return;
       const firedNpcId = data.npcId;
-      removeNpc(firedNpcId);
-      removeTasksForNpc(firedNpcId);
+      removeOfficeNpc(currentOfficeIdRef.current, firedNpcId);
+      removeOfficeTasksForNpc(currentOfficeIdRef.current, firedNpcId);
       setChannelNpcs(prev => prev.filter(n => n.id !== firedNpcId));
       setAllTasks(prev => prev.filter(t => t.npcId !== firedNpcId));
       EventBus.emit("npc:remove-local", { npcId: firedNpcId });
-      localMultiplayer.current?.emit("npc:removed", { npcId: firedNpcId });
+      localMultiplayer.current?.emit("npc:removed", { officeId: currentOfficeIdRef.current, npcId: firedNpcId });
     };
     EventBus.on("npc:edit", onNpcEdit);
     EventBus.on("npc:fire", onNpcFire);
@@ -1340,7 +1653,22 @@ function GamePageInner() {
       // We wrap it as { tiledJson } so reloading can extract tiledJson from mapData.tiledJson.
       const data = mapData as Record<string, unknown>;
       const toSave = data?.tiledJson ? { tiledJson: data.tiledJson } : mapData;
-      saveChannel({ id: "default", name: "Office", mapData: toSave, tiledJson: null, mapConfig: null, mapVersion: 2 });
+      const channel: LocalChannel = {
+        id: currentOfficeIdRef.current,
+        name: currentOfficeNameRef.current,
+        mapData: toSave,
+        tiledJson: null,
+        mapConfig: null,
+        mapVersion: OFFICE_MAP_VERSION,
+      };
+      saveOfficeChannel(currentOfficeIdRef.current, channel);
+      persistOfficeSnapshot({
+        officeId: currentOfficeIdRef.current,
+        officeName: currentOfficeNameRef.current,
+        ownerPlayerId: currentOfficeOwnerIdRef.current,
+        ownerPlayerName: currentOfficeOwnerNameRef.current,
+        channel,
+      }).catch(() => {});
     };
     EventBus.on("map:saved", onMapSaved);
     return () => { EventBus.off("map:saved", onMapSaved); };
@@ -1439,11 +1767,25 @@ function GamePageInner() {
         </div>
       )}
 
+      {/* Visiting office banner */}
+      {visitingOfficeNotice && mode === "office" && (
+        <div className="fixed top-12 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 px-4 py-2 bg-sky-950/90 border border-sky-500/60 rounded-lg text-sky-100 text-sm shadow-lg">
+          <Globe className="w-4 h-4 text-sky-300" />
+          <span>{visitingOfficeNotice}</span>
+          <button
+            onClick={handleReturnToMyOffice}
+            className="px-2 py-0.5 rounded bg-sky-500/20 hover:bg-sky-500/30 text-xs font-semibold"
+          >
+            Return to My Office
+          </button>
+        </div>
+      )}
+
       {/* Top bar — floating over game */}
       <div className="fixed top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-2 bg-black/50 backdrop-blur-sm">
         {/* Left: Channel name — Character name */}
         <h1 className="text-lg font-bold">
-          VieworksRPG &mdash; {character?.name}
+          VieworksRPG &mdash; {currentOfficeName} &mdash; {character?.name}
         </h1>
 
         {/* Right: grouped controls */}
@@ -1649,7 +1991,7 @@ function GamePageInner() {
           </button>
 
           {/* Map editor toggle button (H1) */}
-          {mode === "office" && (
+          {mode === "office" && isOwner && (
             <button
               onClick={handleToggleMapEditor}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-caption font-semibold ${
@@ -1927,21 +2269,21 @@ function GamePageInner() {
             if (updates.appearance) lsUpdates.appearance = updates.appearance;
             if (updates.direction) lsUpdates.direction = updates.direction;
             if (updates.provider || updates.model || updates.apiKey || updates.systemPrompt || updates.files) {
-              const existing = getNpcs().find(n => n.id === npcId);
+              const existing = getScopedNpcs().find(n => n.id === npcId);
               if (existing) {
                 lsUpdates.agentConfig = {
                   ...existing.agentConfig,
-                  ...(updates.provider && { provider: updates.provider as "openai" | "anthropic" | "google" }),
-                  ...(updates.model && { model: updates.model }),
-                  ...(updates.apiKey && { apiKey: updates.apiKey }),
-                  ...(updates.systemPrompt && { systemPrompt: updates.systemPrompt }),
-                  ...(updates.files !== undefined && { files: updates.files }),
+                  provider: (updates.provider as "openai" | "anthropic" | "google") || existing.agentConfig.provider,
+                  model: updates.model || existing.agentConfig.model,
+                  apiKey: updates.apiKey || existing.agentConfig.apiKey,
+                  systemPrompt: updates.systemPrompt || existing.agentConfig.systemPrompt,
+                  files: updates.files ?? existing.agentConfig.files,
                 };
               }
             }
-            updateNpc(npcId, lsUpdates);
+            updateOfficeNpc(currentOfficeIdRef.current, npcId, lsUpdates);
             setChannelNpcs(prev => prev.map(n => n.id === npcId ? { ...n, ...lsUpdates } : n));
-            const localUpdate = { ...lsUpdates, npcId };
+            const localUpdate = { ...lsUpdates, npcId, officeId: currentOfficeIdRef.current };
             EventBus.emit("npc:update-local", localUpdate);
             localMultiplayer.current?.emit("npc:updated", localUpdate);
             setShowHireModal(false);
@@ -1959,7 +2301,7 @@ function GamePageInner() {
       />
 
       <TaskBoard
-        channelId="default"
+        channelId={currentOfficeId}
         isOpen={showTaskBoard}
         onClose={() => setShowTaskBoard(false)}
         tasks={allTasks}
@@ -1978,12 +2320,9 @@ function GamePageInner() {
         onVisit={(player, isOnline) => {
           setShowDirectory(false);
           if (isOnline) {
-            const pos = remotePlayerPositions.current.get(player.id);
-            if (pos) EventBus.emit("teleport-to-position", pos);
-            else EventBus.emit("teleport-to-player", { playerId: player.id });
+            handleVisitPlayer(player.id, player.last_position);
           } else {
-            if (player.last_position) EventBus.emit("teleport-to-position", player.last_position);
-            else showToastNotification(`offline-no-pos-${player.id}`, t("game.offlineNoPosition"));
+            handleVisitOfflinePlayer(player);
           }
         }}
         onMessage={(player) => {

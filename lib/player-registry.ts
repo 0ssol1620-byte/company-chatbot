@@ -9,6 +9,8 @@
  *   name text not null,
  *   appearance jsonb,
  *   last_position jsonb,
+ *   office_id text,
+ *   office_name text,
  *   last_seen timestamptz default now()
  * );
  * alter table public.player_registry enable row level security;
@@ -35,6 +37,9 @@ export interface PlayerRecord {
   name: string
   appearance: unknown
   last_position: { x: number; y: number } | null
+  office_id?: string | null
+  office_name?: string | null
+  office_owner_id?: string | null
   last_seen: string
 }
 
@@ -54,6 +59,9 @@ export async function upsertPlayer(player: {
   name: string
   appearance: unknown
   last_position?: { x: number; y: number } | null
+  office_id?: string | null
+  office_name?: string | null
+  office_owner_id?: string | null
 }): Promise<void> {
   try {
     await supabase.from('player_registry').upsert({
@@ -61,6 +69,9 @@ export async function upsertPlayer(player: {
       name: player.name,
       appearance: player.appearance,
       last_position: player.last_position ?? null,
+      office_id: player.office_id ?? null,
+      office_name: player.office_name ?? null,
+      office_owner_id: player.office_owner_id ?? player.id,
       last_seen: new Date().toISOString(),
     })
   } catch { /* graceful degrade if table doesn't exist yet */ }
@@ -108,6 +119,19 @@ export async function getOfflinePlayers(onlineIds: string[]): Promise<PlayerReco
       : data
   } catch {
     return []
+  }
+}
+
+export async function getPlayerById(playerId: string): Promise<PlayerRecord | null> {
+  try {
+    const { data } = await supabase
+      .from('player_registry')
+      .select('*')
+      .eq('id', playerId)
+      .single()
+    return (data as PlayerRecord | null) ?? null
+  } catch {
+    return null
   }
 }
 

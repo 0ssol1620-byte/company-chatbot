@@ -109,6 +109,20 @@ const KEYS = {
   players: (tabId: string) => `deskrpg:players:${tabId}`,
 } as const;
 
+const OFFICE_KEY_PREFIX = "deskrpg:office:";
+
+function encodeOfficeKeyPart(value: string): string {
+  return encodeURIComponent(value);
+}
+
+const OFFICE_KEYS = {
+  channel: (officeId: string) => `${OFFICE_KEY_PREFIX}${encodeOfficeKeyPart(officeId)}:channel`,
+  npcs: (officeId: string) => `${OFFICE_KEY_PREFIX}${encodeOfficeKeyPart(officeId)}:npcs`,
+  tasks: (officeId: string) => `${OFFICE_KEY_PREFIX}${encodeOfficeKeyPart(officeId)}:tasks`,
+  playerPosition: (officeId: string) => `${OFFICE_KEY_PREFIX}${encodeOfficeKeyPart(officeId)}:player-position`,
+  npcChat: (officeId: string, npcId: string) => `${OFFICE_KEY_PREFIX}${encodeOfficeKeyPart(officeId)}:npc-chat:${npcId}`,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -158,7 +172,7 @@ export function clearCharacter(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Channel (single default channel per device)
+// Channel
 // ---------------------------------------------------------------------------
 
 export function getChannel(): LocalChannel | null {
@@ -167,6 +181,34 @@ export function getChannel(): LocalChannel | null {
 
 export function saveChannel(channel: LocalChannel): void {
   set(KEYS.CHANNEL, channel);
+}
+
+export function getOfficeChannel(officeId: string): LocalChannel | null {
+  return get<LocalChannel>(OFFICE_KEYS.channel(officeId));
+}
+
+export function saveOfficeChannel(officeId: string, channel: LocalChannel): void {
+  set(OFFICE_KEYS.channel(officeId), channel);
+}
+
+export function migrateLegacyOfficeStorage(officeId: string): void {
+  const legacyChannel = getChannel();
+  const legacyNpcs = getNpcs();
+  const legacyTasks = getTasks();
+  const legacyPlayerPosition = getPlayerPosition();
+
+  if (legacyChannel && !getOfficeChannel(officeId)) {
+    saveOfficeChannel(officeId, legacyChannel);
+  }
+  if (legacyNpcs.length > 0 && getOfficeNpcs(officeId).length === 0) {
+    saveOfficeNpcs(officeId, legacyNpcs);
+  }
+  if (legacyTasks.length > 0 && getOfficeTasks(officeId).length === 0) {
+    saveOfficeTasks(officeId, legacyTasks);
+  }
+  if (legacyPlayerPosition && !getOfficePlayerPosition(officeId)) {
+    saveOfficePlayerPosition(officeId, legacyPlayerPosition);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,9 +223,22 @@ export function saveNpcs(npcs: LocalNpc[]): void {
   set(KEYS.NPCS, npcs);
 }
 
+export function getOfficeNpcs(officeId: string): LocalNpc[] {
+  return get<LocalNpc[]>(OFFICE_KEYS.npcs(officeId)) ?? [];
+}
+
+export function saveOfficeNpcs(officeId: string, npcs: LocalNpc[]): void {
+  set(OFFICE_KEYS.npcs(officeId), npcs);
+}
+
 export function addNpc(npc: LocalNpc): void {
   const existing = getNpcs();
   saveNpcs([...existing.filter((n) => n.id !== npc.id), npc]);
+}
+
+export function addOfficeNpc(officeId: string, npc: LocalNpc): void {
+  const existing = getOfficeNpcs(officeId);
+  saveOfficeNpcs(officeId, [...existing.filter((n) => n.id !== npc.id), npc]);
 }
 
 export function updateNpc(npcId: string, updates: Partial<LocalNpc>): void {
@@ -191,10 +246,20 @@ export function updateNpc(npcId: string, updates: Partial<LocalNpc>): void {
   saveNpcs(existing.map((n) => (n.id === npcId ? { ...n, ...updates } : n)));
 }
 
+export function updateOfficeNpc(officeId: string, npcId: string, updates: Partial<LocalNpc>): void {
+  const existing = getOfficeNpcs(officeId);
+  saveOfficeNpcs(officeId, existing.map((n) => (n.id === npcId ? { ...n, ...updates } : n)));
+}
+
 export function removeNpc(npcId: string): void {
   saveNpcs(getNpcs().filter((n) => n.id !== npcId));
   // Also clear chat history
   remove(KEYS.npcChat(npcId));
+}
+
+export function removeOfficeNpc(officeId: string, npcId: string): void {
+  saveOfficeNpcs(officeId, getOfficeNpcs(officeId).filter((n) => n.id !== npcId));
+  remove(OFFICE_KEYS.npcChat(officeId, npcId));
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +322,14 @@ export function saveTasks(tasks: LocalTask[]): void {
   set(KEYS.TASKS, tasks);
 }
 
+export function getOfficeTasks(officeId: string): LocalTask[] {
+  return get<LocalTask[]>(OFFICE_KEYS.tasks(officeId)) ?? [];
+}
+
+export function saveOfficeTasks(officeId: string, tasks: LocalTask[]): void {
+  set(OFFICE_KEYS.tasks(officeId), tasks);
+}
+
 export function upsertTask(task: LocalTask): void {
   const existing = getTasks();
   const idx = existing.findIndex((t) => t.id === task.id);
@@ -268,12 +341,31 @@ export function upsertTask(task: LocalTask): void {
   }
 }
 
+export function upsertOfficeTask(officeId: string, task: LocalTask): void {
+  const existing = getOfficeTasks(officeId);
+  const idx = existing.findIndex((t) => t.id === task.id);
+  if (idx >= 0) {
+    existing[idx] = task;
+    saveOfficeTasks(officeId, existing);
+  } else {
+    saveOfficeTasks(officeId, [task, ...existing]);
+  }
+}
+
 export function removeTask(taskId: string): void {
   saveTasks(getTasks().filter((t) => t.id !== taskId));
 }
 
+export function removeOfficeTask(officeId: string, taskId: string): void {
+  saveOfficeTasks(officeId, getOfficeTasks(officeId).filter((t) => t.id !== taskId));
+}
+
 export function removeTasksForNpc(npcId: string): void {
   saveTasks(getTasks().filter((t) => t.npcId !== npcId));
+}
+
+export function removeOfficeTasksForNpc(officeId: string, npcId: string): void {
+  saveOfficeTasks(officeId, getOfficeTasks(officeId).filter((t) => t.npcId !== npcId));
 }
 
 // ---------------------------------------------------------------------------
@@ -299,4 +391,12 @@ export function getPlayerPosition(): { x: number; y: number } | null {
 
 export function savePlayerPosition(pos: { x: number; y: number }): void {
   set(KEYS.PLAYER_POSITION, pos);
+}
+
+export function getOfficePlayerPosition(officeId: string): { x: number; y: number } | null {
+  return get<{ x: number; y: number }>(OFFICE_KEYS.playerPosition(officeId));
+}
+
+export function saveOfficePlayerPosition(officeId: string, pos: { x: number; y: number }): void {
+  set(OFFICE_KEYS.playerPosition(officeId), pos);
 }
