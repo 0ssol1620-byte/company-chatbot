@@ -78,7 +78,9 @@ import {
   buildPlayerOfficeRecord,
   buildOfficeSnapshotSeedFromRecord,
   getDefaultOfficeName,
+  getHomeOfficeTargetForPlayer,
   getOfficeIdForPlayer,
+  isPlayerRegistryRecentlyActive,
 } from "@/lib/office-state";
 
 const APP_VERSION = "2026.4.6";
@@ -1273,12 +1275,12 @@ function GamePageInner() {
   }, fallbackPos?: { x: number; y: number } | null) => {
     if (!character) return;
 
-    const targetOfficeId = player.office_id ?? getOfficeIdForPlayer(player.id);
+    const homeOfficeTarget = getHomeOfficeTargetForPlayer(player);
     const ok = await switchToOffice({
-      officeId: targetOfficeId,
-      officeName: player.office_name ?? getDefaultOfficeName(player.name),
-      ownerPlayerId: player.office_owner_id ?? player.id,
-      ownerPlayerName: player.name,
+      officeId: homeOfficeTarget.officeId,
+      officeName: homeOfficeTarget.officeName,
+      ownerPlayerId: homeOfficeTarget.ownerPlayerId,
+      ownerPlayerName: homeOfficeTarget.ownerPlayerName,
       ownerAppearance: player.appearance as CharacterAppearance | LegacyCharacterAppearance | null,
       ownerOffline: false,
       preferredSavedPosition: fallbackPos ?? player.last_position,
@@ -1291,14 +1293,14 @@ function GamePageInner() {
   }, [character, closeRosterMenus, showToastNotification, switchToOffice]);
 
   const handleVisitOfflinePlayer = useCallback(async (player: PlayerRecord) => {
-    const targetOfficeId = player.office_id ?? getOfficeIdForPlayer(player.id);
+    const homeOfficeTarget = getHomeOfficeTargetForPlayer(player);
     const ok = await switchToOffice({
-      officeId: targetOfficeId,
-      officeName: player.office_name ?? getDefaultOfficeName(player.name),
-      ownerPlayerId: player.office_owner_id ?? player.id,
-      ownerPlayerName: player.name,
+      officeId: homeOfficeTarget.officeId,
+      officeName: homeOfficeTarget.officeName,
+      ownerPlayerId: homeOfficeTarget.ownerPlayerId,
+      ownerPlayerName: homeOfficeTarget.ownerPlayerName,
       ownerAppearance: player.appearance as CharacterAppearance | LegacyCharacterAppearance | null,
-      ownerOffline: true,
+      ownerOffline: !isPlayerRegistryRecentlyActive(player.last_seen),
       preferredSavedPosition: player.last_position,
     });
 

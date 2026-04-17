@@ -5,6 +5,7 @@ import type { PlayerOfficeRecord } from "./office-registry";
 export const OFFICE_MAP_VERSION = 2;
 export const DEFAULT_OFFICE_NAME_FALLBACK = "Office";
 export const DEFAULT_OFFICE_MAP_CONFIG = { spawnCol: 10, spawnRow: 7 };
+export const PLAYER_REGISTRY_ACTIVE_WINDOW_MS = 90_000;
 
 export interface OfficeRuntimeState {
   officeId: string;
@@ -32,6 +33,30 @@ export function getOfficeIdForPlayer(playerId: string): string {
 
 export function getDefaultOfficeName(playerName: string): string {
   return `${playerName}'s Office`;
+}
+
+export function getHomeOfficeTargetForPlayer(player: {
+  id: string;
+  name: string;
+}): {
+  officeId: string;
+  officeName: string;
+  ownerPlayerId: string;
+  ownerPlayerName: string;
+} {
+  return {
+    officeId: getOfficeIdForPlayer(player.id),
+    officeName: getDefaultOfficeName(player.name),
+    ownerPlayerId: player.id,
+    ownerPlayerName: player.name,
+  };
+}
+
+export function isPlayerRegistryRecentlyActive(lastSeen: string | null | undefined, now = Date.now()): boolean {
+  if (!lastSeen) return false;
+  const lastSeenAt = Date.parse(lastSeen);
+  if (Number.isNaN(lastSeenAt)) return false;
+  return now - lastSeenAt <= PLAYER_REGISTRY_ACTIVE_WINDOW_MS;
 }
 
 export function buildOfficeRuntimeState(input: {

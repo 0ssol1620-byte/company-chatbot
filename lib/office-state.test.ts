@@ -9,6 +9,8 @@ import {
   buildOfficeSnapshotSeedFromRecord,
   getDefaultOfficeName,
   getOfficeIdForPlayer,
+  getHomeOfficeTargetForPlayer,
+  isPlayerRegistryRecentlyActive,
 } from "./office-state";
 import type { LocalChannel, LocalNpc, LocalTask } from "./local-store";
 
@@ -57,6 +59,31 @@ test("buildPendingOfficeChannelData preserves office-specific channel id and map
   assert.deepEqual(pending?.mapConfig, { spawnCol: 2, spawnRow: 4 });
   assert.deepEqual(pending?.savedPosition, { x: 7, y: 9 });
   assert.deepEqual(pending?.tiledJson, { layers: [] });
+});
+
+test("getHomeOfficeTargetForPlayer always resolves the player's own office even if registry stores a visited office", () => {
+  const target = getHomeOfficeTargetForPlayer({
+    id: "phillip",
+    name: "Phillip",
+    office_id: "office:alice",
+    office_name: "Alice HQ",
+    office_owner_id: "alice",
+  });
+
+  assert.deepEqual(target, {
+    officeId: "office:phillip",
+    officeName: "Phillip's Office",
+    ownerPlayerId: "phillip",
+    ownerPlayerName: "Phillip",
+  });
+});
+
+test("isPlayerRegistryRecentlyActive only treats fresh registry heartbeats as online", () => {
+  const now = Date.parse("2026-04-17T04:00:00.000Z");
+
+  assert.equal(isPlayerRegistryRecentlyActive("2026-04-17T03:59:20.000Z", now), true);
+  assert.equal(isPlayerRegistryRecentlyActive("2026-04-17T03:57:59.000Z", now), false);
+  assert.equal(isPlayerRegistryRecentlyActive(null, now), false);
 });
 
 test("office record conversion round-trips channel and NPC snapshot data", () => {

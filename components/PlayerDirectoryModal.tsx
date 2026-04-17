@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Search, X, MessageSquare, Footprints } from "lucide-react";
 import { useT } from "@/lib/i18n";
 import { getAllPlayers, type PlayerRecord } from "@/lib/player-registry";
+import { isPlayerRegistryRecentlyActive } from "@/lib/office-state";
 import type { OfflineMessage } from "@/lib/player-registry";
 import type { CharacterAppearance, LegacyCharacterAppearance } from "@/lib/lpc-registry";
 
@@ -48,7 +49,7 @@ export default function PlayerDirectoryModal({
     setPlayers(
       all
         .filter(p => p.id !== selfId)
-        .map(p => ({ ...p, isOnline: onlineSet.has(p.id) }))
+        .map(p => ({ ...p, isOnline: onlineSet.has(p.id) || isPlayerRegistryRecentlyActive(p.last_seen) }))
         .sort((a, b) => {
           // Online first, then by last_seen desc
           if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
