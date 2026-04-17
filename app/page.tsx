@@ -126,6 +126,7 @@ interface ChannelPlayerSummary {
   id: string;
   name: string;
   appearance: CharacterAppearance | LegacyCharacterAppearance | null;
+  offline?: boolean;
 }
 
 type RosterActionMenu =
@@ -133,6 +134,7 @@ type RosterActionMenu =
       type: "player";
       playerId: string;
       playerName: string;
+      offline?: boolean;
       x: number;
       y: number;
     }
@@ -149,6 +151,7 @@ type RosterActionMenuInput =
       type: "player";
       playerId: string;
       playerName: string;
+      offline?: boolean;
     }
   | {
       type: "npc";
@@ -432,6 +435,7 @@ function GamePageInner() {
         id: seed.ownerPlayerId,
         name: seed.ownerPlayerName,
         appearance: seed.ownerAppearance ?? null,
+        offline: seed.ownerOffline ?? false,
       }] : []),
     ]);
     setOfficeOwnerPreview(runtime.isVisiting ? {
@@ -866,6 +870,7 @@ function GamePageInner() {
         name: presences[0]?.name || 'Unknown',
         appearance: (presences[0]?.appearance as CharacterAppearance | LegacyCharacterAppearance | null) || null,
         position: presences[0]?.position,
+        offline: false,
       }));
       players.forEach(p => {
         if (p.position) remotePlayerPositions.current.set(p.id, p.position);
@@ -881,7 +886,7 @@ function GamePageInner() {
         const self = prev.find(p => p.id === '__self__');
         const currentOwnerPreview = officeOwnerPreviewRef.current;
         const placeholderOwner = currentOwnerPreview && !players.some((p) => p.id === currentOwnerPreview.id)
-          ? [{ id: currentOwnerPreview.id, name: currentOwnerPreview.name, appearance: currentOwnerPreview.appearance }]
+          ? [{ id: currentOwnerPreview.id, name: currentOwnerPreview.name, appearance: currentOwnerPreview.appearance, offline: true }]
           : [];
         const others = players.filter(p => p.id !== character.id);
         const next = self ? [self, ...placeholderOwner, ...others.filter((p, index, arr) => arr.findIndex(x => x.id === p.id) === index)] : [...placeholderOwner, ...others];
@@ -1094,6 +1099,7 @@ function GamePageInner() {
         type: "player",
         playerId: data.playerId,
         playerName: data.playerName,
+        offline: data.offline ?? false,
         x: data.screenX,
         y: data.screenY,
       });
@@ -1185,7 +1191,7 @@ function GamePageInner() {
     const y = Math.max(12, Math.min(rect.top, window.innerHeight - menuHeight - 12));
     setContextMenu(null);
     if (menu.type === "player") {
-      setRosterActionMenu({ type: "player", playerId: menu.playerId, playerName: menu.playerName, x, y });
+      setRosterActionMenu({ type: "player", playerId: menu.playerId, playerName: menu.playerName, offline: menu.offline, x, y });
       return;
     }
 
@@ -1232,6 +1238,11 @@ function GamePageInner() {
   }, [closeRosterMenus]);
 
   const handleOpenPlayerChat = useCallback((player?: { id: string; name: string; offline?: boolean }) => {
+    appendOfficeTrace("player-chat:click", {
+      playerId: player?.id ?? null,
+      playerName: player?.name ?? null,
+      offline: player?.offline ?? null,
+    });
     EventBus.emit("player:chat-open", player ? { playerId: player.id, playerName: player.name, offline: player.offline ?? false } : undefined);
     closeRosterMenus();
   }, [closeRosterMenus]);
@@ -2065,7 +2076,7 @@ function GamePageInner() {
                     {(unreadChatCount + inbox.length) > 9 ? "9+" : (unreadChatCount + inbox.length)}
                   </span>
                 )}
-                <span>{t("game.playersOnlineCount", { count: channelPlayers.length })}</span>
+                <span>{t("game.playersOnlineCount", { count: channelPlayers.filter(player => !player.offline).length })}</span>
               </button>
               <button
                 onClick={() => {
@@ -2096,7 +2107,7 @@ function GamePageInner() {
               <div className="absolute top-full left-0 mt-2 w-64 bg-surface border border-border rounded-lg shadow-xl z-50 overflow-hidden">
                 <div className="px-3 py-2 border-b border-border text-caption text-text-dim flex items-center justify-between gap-2">
                   <span>
-                    {showRosterMenu === "players" ? t("game.playersOnlineCount", { count: channelPlayers.length }) : t("game.npcsAtWorkCount", { count: channelNpcs.length })}
+                    {showRosterMenu === "players" ? t("game.playersOnlineCount", { count: channelPlayers.filter(player => !player.offline).length }) : t("game.npcsAtWorkCount", { count: channelNpcs.length })}
                   </span>
                   {showRosterMenu === "npcs" && isOwner && mode === "office" && (
                     <button
@@ -2115,7 +2126,7 @@ function GamePageInner() {
                   {showRosterMenu === "players" ? (
                     <>
                       {/* Online players */}
-                      {channelPlayers.length > 0 ? channelPlayers.map((player) => (
+                      {channelPlayers.filter(player => !player.offline).length > 0 ? channelPlayers.filter(player => !player.offline).map((player) => (
                         player.id === "__self__" ? (
                           <div key={player.id} className="px-3 py-2 text-body text-text-secondary flex items-center gap-2">
                             <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
@@ -2793,7 +2804,7 @@ function GamePageInner() {
                       onClick={() => handleOpenPlayerChat({
                         id: rosterActionMenu.playerId,
                         name: rosterActionMenu.playerName,
-                        offline: !!officeOwnerPreview && officeOwnerPreview.id === rosterActionMenu.playerId && officeOwnerPreview.offline,
+                        offline: rosterActionMenu.offline ?? false,
                       })}
                       className="w-full text-left px-3 py-2 text-body text-text hover:bg-surface-raised"
                     >

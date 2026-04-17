@@ -1671,13 +1671,23 @@ export class GameScene extends Phaser.Scene {
       // Right-click on NPC or remote player: context menu
       if (pointer.rightButtonDown()) {
         const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        const nativeEvent = pointer.event as MouseEvent | PointerEvent | TouchEvent | undefined;
+        const viewportPoint = (() => {
+          if (nativeEvent && "clientX" in nativeEvent && typeof nativeEvent.clientX === "number") {
+            return { x: nativeEvent.clientX, y: nativeEvent.clientY };
+          }
+          if (nativeEvent && "touches" in nativeEvent && nativeEvent.touches[0]) {
+            return { x: nativeEvent.touches[0].clientX, y: nativeEvent.touches[0].clientY };
+          }
+          return { x: pointer.x, y: pointer.y };
+        })();
         for (const npc of this.npcSprites) {
           if (npc.distanceTo(worldPoint.x, worldPoint.y) < TILE_SIZE * 1.5) {
             EventBus.emit("npc:context-menu", {
               npcId: npc.id,
               npcName: npc.name,
-              screenX: pointer.x,
-              screenY: pointer.y,
+              screenX: viewportPoint.x,
+              screenY: viewportPoint.y,
               moveState: npc.moveState,
             });
             return;
@@ -1693,8 +1703,8 @@ export class GameScene extends Phaser.Scene {
             EventBus.emit("player:context-menu", {
               playerId,
               playerName: remote.nameLabel.text,
-              screenX: pointer.x,
-              screenY: pointer.y,
+              screenX: viewportPoint.x,
+              screenY: viewportPoint.y,
               offline: remote.offline,
             });
             return;
