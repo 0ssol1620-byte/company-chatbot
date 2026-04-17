@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { EventBus, pendingChannelData, setPendingChannelData } from "../EventBus";
 import type { LocalMultiplayer } from "@/lib/local-multiplayer";
+import { getOfficeNpcs, type LocalNpc } from "@/lib/local-store";
 import { MapObject, MapData, OBJECT_TYPES, OBJECT_TYPE_LIST, computeOccupiedTiles, detectAndConvertMapData, generateObjectId, canPlaceObject, getObjectDimensions } from "@/lib/object-types";
 import { getCenteredCameraBounds } from "../camera-layout";
 
@@ -2726,8 +2727,8 @@ export class GameScene extends Phaser.Scene {
   /** Fetch NPC positions early so spawn collision check works before sprites load */
   private async prefetchNpcPositions(): Promise<NpcData[]> {
     try {
-      const raw = typeof window !== "undefined" ? localStorage.getItem("deskrpg:npcs") : null;
-      const npcs: NpcData[] = raw ? JSON.parse(raw) : [];
+      const officeScopedNpcs = getOfficeNpcs(this.channelId);
+      const npcs: NpcData[] = officeScopedNpcs as unknown as NpcData[];
       for (const npc of npcs) {
         this.npcTilePositions.add(`${npc.positionX},${npc.positionY}`);
       }
@@ -2789,7 +2790,9 @@ export class GameScene extends Phaser.Scene {
 
     // NPC real-time sync (cross-tab)
     lm.on("npc:added", (data: unknown) => {
-      const npcData = data as NpcData;
+      const payload = data as { officeId?: string; npc?: LocalNpc };
+      if (!payload.officeId || payload.officeId !== this.channelId || !payload.npc) return;
+      const npcData = payload.npc as unknown as NpcData;
       if (this.npcSprites.some(n => n.id === npcData.id)) return;
       const npc = new NpcSprite(this, npcData);
       this.npcSprites.push(npc);
@@ -2797,13 +2800,15 @@ export class GameScene extends Phaser.Scene {
     });
 
     lm.on("npc:updated", (data: unknown) => {
-      const d = data as { npcId: string; name?: string; direction?: string; appearance?: unknown };
+      const d = data as { officeId?: string; npcId: string; name?: string; direction?: string; appearance?: unknown };
+      if (!d.officeId || d.officeId !== this.channelId) return;
       const npc = this.npcSprites.find(n => n.id === d.npcId);
       if (npc) npc.updateFromData(d);
     });
 
     lm.on("npc:removed", (data: unknown) => {
-      const { npcId } = data as { npcId: string };
+      const { officeId, npcId } = data as { officeId?: string; npcId: string };
+      if (!officeId || officeId !== this.channelId) return;
       this.removeNpcById(npcId);
     });
 
