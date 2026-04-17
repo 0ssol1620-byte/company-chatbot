@@ -67,7 +67,6 @@ import {
   sendOfflineMessage,
   getUnreadMessages,
   markMessagesRead,
-  getPlayerById,
   type PlayerRecord,
   type OfflineMessage,
 } from "@/lib/player-registry";
@@ -246,7 +245,7 @@ function GamePageInner() {
   const [npcMessages, setNpcMessages] = useState<NpcChatMessage[]>([]);
   const [isNpcStreaming, setIsNpcStreaming] = useState(false);
   const [npcSelectList, setNpcSelectList] = useState<{ npcId: string; npcName: string }[] | null>(null);
-  const [interactSelectList, setInteractSelectList] = useState<{ id: string; name: string; type: "npc" | "player" }[] | null>(null);
+  const [interactSelectList, setInteractSelectList] = useState<{ id: string; name: string; type: "npc" | "player"; offline?: boolean }[] | null>(null);
 
   // Channel chat state
   const [channelMessages, setChannelMessages] = useState<ChannelChatMessage[]>([]);
@@ -937,7 +936,7 @@ function GamePageInner() {
       setNpcSelectList(data.npcs);
     };
 
-    const handleInteractSelect = (data: { targets: { id: string; name: string; type: "npc" | "player" }[] }) => {
+    const handleInteractSelect = (data: { targets: { id: string; name: string; type: "npc" | "player"; offline?: boolean }[] }) => {
       setInteractSelectList(data.targets);
     };
 
@@ -953,8 +952,17 @@ function GamePageInner() {
       setChannelChatInputDisabled(!enabled);
     };
 
-    const handlePlayerChatOpen = () => {
+    const handlePlayerChatOpen = (data?: { playerId?: string; playerName?: string; offline?: boolean }) => {
       resetDialog();
+      if (data?.playerId && data.offline) {
+        setOfflineMsgTarget({ id: data.playerId, name: data.playerName || "Player" });
+        setOfflineMsgText("");
+        setChannelChatOpen(false);
+        setChannelChatInputDisabled(true);
+        setUnreadChatCount(0);
+        EventBus.emit("dialog:open");
+        return;
+      }
       setChannelChatOpen(true);
       setChannelChatInputDisabled(false);
       setUnreadChatCount(0);
@@ -1115,8 +1123,8 @@ function GamePageInner() {
     closeRosterMenus();
   }, [closeRosterMenus]);
 
-  const handleOpenPlayerChat = useCallback(() => {
-    EventBus.emit("player:chat-open");
+  const handleOpenPlayerChat = useCallback((player?: { id: string; name: string; offline?: boolean }) => {
+    EventBus.emit("player:chat-open", player ? { playerId: player.id, playerName: player.name, offline: player.offline ?? false } : undefined);
     closeRosterMenus();
   }, [closeRosterMenus]);
 
@@ -1222,14 +1230,16 @@ function GamePageInner() {
     closeRosterMenus();
   }, [character, closeRosterMenus, homeOfficeId, homeOfficeName, showToastNotification, switchToOffice]);
 
-  const handleVisitPlayer = useCallback(async (playerId: string, fallbackPos?: { x: number; y: number } | null) => {
+  const handleVisitPlayer = useCallback(async (player: {
+    id: string;
+    name: string;
+    appearance: unknown;
+    last_position?: { x: number; y: number } | null;
+    office_id?: string | null;
+    office_name?: string | null;
+    office_owner_id?: string | null;
+  }, fallbackPos?: { x: number; y: number } | null) => {
     if (!character) return;
-    const player = await getPlayerById(playerId);
-    if (!player) {
-      showToastNotification(`visit-player-missing-${playerId}`, "Could not find that player's office.");
-      closeRosterMenus();
-      return;
-    }
 
     const targetOfficeId = player.office_id ?? getOfficeIdForPlayer(player.id);
     const ok = await switchToOffice({
@@ -1967,7 +1977,7 @@ function GamePageInner() {
                             <RosterAvatar appearance={player.appearance} />
                             <span className="truncate flex-1">{player.name}</span>
                             <button
-                              onClick={() => handleVisitPlayer(player.id)}
+                              onClick={() => handleVisitPlayer(player)}
                               className="px-2 py-0.5 rounded text-micro bg-primary/70 hover:bg-primary text-white font-semibold shrink-0"
                             >
                               {t("game.visitPlayer")}
@@ -2403,7 +2413,7 @@ function GamePageInner() {
         onVisit={(player, isOnline) => {
           setShowDirectory(false);
           if (isOnline) {
-            handleVisitPlayer(player.id, player.last_position);
+            handleVisitPlayer(player, player.last_position);
           } else {
             handleVisitOfflinePlayer(player);
           }
@@ -2476,7 +2486,7 @@ function GamePageInner() {
                       if (target.type === "npc") {
                         EventBus.emit("npc:interact", { npcId: target.id, npcName: target.name });
                       } else {
-                        EventBus.emit("player:chat-open");
+                        EventBus.emit("player:chat-open", { playerId: target.id, playerName: target.name, offline: (target as { offline?: boolean }).offline ?? false });
                       }
                     }}
                     className="w-full text-left px-3 py-2 text-body text-text hover:bg-surface-raised rounded flex items-center gap-2"
@@ -2628,7 +2638,11 @@ function GamePageInner() {
                     </>
                   ) : (
                     <button
-                      onClick={handleOpenPlayerChat}
+                      onClick={() => handleOpenPlayerChat({
+                        id: rosterActionMenu.playerId,
+                        name: rosterActionMenu.playerName,
+                        offline: !!officeOwnerPreview && officeOwnerPreview.id === rosterActionMenu.playerId && officeOwnerPreview.offline,
+                      })}
                       className="w-full text-left px-3 py-2 text-body text-text hover:bg-surface-raised"
                     >
                       <MessageSquare className="w-3.5 h-3.5 inline mr-1" />{t("context.talk")}

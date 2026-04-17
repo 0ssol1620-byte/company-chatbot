@@ -166,6 +166,7 @@ interface RemotePlayerData {
   y: number;
   direction: string;
   animation: string;
+  offline?: boolean;
 }
 
 class RemotePlayer {
@@ -176,6 +177,7 @@ class RemotePlayer {
   direction: string;
   animation: string;
   textureKey: string;
+  offline: boolean;
 
   constructor(scene: Phaser.Scene, data: RemotePlayerData, textureKey: string) {
     this.textureKey = textureKey;
@@ -183,6 +185,7 @@ class RemotePlayer {
     this.targetY = data.y;
     this.direction = data.direction || "down";
     this.animation = data.animation || "idle";
+    this.offline = data.offline ?? false;
 
     const dirIdx = DIR_NAME_MAP[this.direction] ?? DIR_DOWN;
 
@@ -206,11 +209,14 @@ class RemotePlayer {
     this.nameLabel.setDepth(20001);
   }
 
-  updatePosition(x: number, y: number, direction: string, animation: string) {
+  updatePosition(x: number, y: number, direction: string, animation: string, offline?: boolean) {
     this.targetX = x;
     this.targetY = y;
     this.direction = direction;
     this.animation = animation;
+    if (typeof offline === "boolean") {
+      this.offline = offline;
+    }
   }
 
   lerpUpdate() {
@@ -803,7 +809,7 @@ export class GameScene extends Phaser.Scene {
   private npcTilePositions: Set<string> = new Set(); // "col,row" for spawn collision check
   private npcPositionSyncTimer = 0;
   private nearbyNpcs: NpcSprite[] = [];
-  private nearbyPlayers: { id: string; name: string }[] = [];
+  private nearbyPlayers: { id: string; name: string; offline: boolean }[] = [];
   private dialogOpen = false;
   private lastToastMessage: string | null = null;
   private lastChatInputEnabled: boolean | null = null;
@@ -1278,9 +1284,14 @@ export class GameScene extends Phaser.Scene {
     });
 
     // Remote player sync from React/Supabase presence
-    EventBus.on("player:joined", (data: { playerId: string; name: string; appearance: unknown; position?: { x: number; y: number } }) => {
+    EventBus.on("player:joined", (data: { playerId: string; name: string; appearance: unknown; position?: { x: number; y: number }; offline?: boolean }) => {
       const joined = data;
       const position = joined.position ?? { x: TILE_SIZE * 10, y: TILE_SIZE * 7 };
+      const existing = this.remotePlayers.get(joined.playerId);
+      if (existing) {
+        existing.updatePosition(position.x, position.y, "down", "idle", joined.offline);
+        return;
+      }
       this.addRemotePlayer({
         id: joined.playerId,
         characterName: joined.name,
@@ -1289,6 +1300,7 @@ export class GameScene extends Phaser.Scene {
         y: position.y,
         direction: "down",
         animation: "idle",
+        offline: joined.offline,
       });
     });
     EventBus.on("player:left", (data: { playerId: string }) => {
@@ -1298,10 +1310,10 @@ export class GameScene extends Phaser.Scene {
         this.remotePlayers.delete(data.playerId);
       }
     });
-    EventBus.on("player:moved", (data: { playerId: string; x: number; y: number }) => {
+    EventBus.on("player:moved", (data: { playerId: string; x: number; y: number; offline?: boolean }) => {
       const remote = this.remotePlayers.get(data.playerId);
       if (remote) {
-        remote.updatePosition(data.x, data.y, "down", "idle");
+        remote.updatePosition(data.x, data.y, "down", "idle", data.offline);
       }
     });
 
@@ -3265,10 +3277,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Check nearby remote players
-    const nearbyP: { id: string; name: string }[] = [];
+    const nearbyP: { id: string; name: string; offline: boolean }[] = [];
     for (const [id, remote] of this.remotePlayers) {
       if (remote.distanceTo(this.player.x, this.player.y) < NPC_INTERACT_RADIUS) {
-        nearbyP.push({ id, name: remote.nameLabel.text });
+        nearbyP.push({ id, name: remote.nameLabel.text, offline: remote.offline });
       }
     }
     this.nearbyPlayers = nearbyP;
@@ -3584,14 +3596,14 @@ export class GameScene extends Phaser.Scene {
       }
       if (!this.dialogOpen) {
         const npcEntries = this.nearbyNpcs.map((n) => ({ id: n.id, name: n.name, type: "npc" as const }));
-        const playerEntries = this.nearbyPlayers.map((p) => ({ id: p.id, name: p.name, type: "player" as const }));
+        const playerEntries = this.nearbyPlayers.map((p) => ({ id: p.id, name: p.name, type: "player" as const, offline: p.offline }));
         const allNearby = [...npcEntries, ...playerEntries];
 
         if (allNearby.length === 1) {
           if (allNearby[0].type === "npc") {
             EventBus.emit("npc:interact", { npcId: allNearby[0].id, npcName: allNearby[0].name });
           } else {
-            EventBus.emit("player:chat-open");
+            EventBus.emit("player:chat-open", { playerId: allNearby[0].id, playerName: allNearby[0].name, offline: allNearby[0].offline });
           }
         } else if (allNearby.length > 1) {
           EventBus.emit("interact:select", { targets: allNearby });
