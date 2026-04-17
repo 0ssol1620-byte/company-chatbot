@@ -431,11 +431,13 @@ function GamePageInner() {
   const currentOfficeNameRef = useRef(currentOfficeName);
   const currentOfficeOwnerIdRef = useRef(currentOfficeOwnerId);
   const currentOfficeOwnerNameRef = useRef(currentOfficeOwnerName);
+  const officeOwnerPreviewRef = useRef(officeOwnerPreview);
 
   useEffect(() => { currentOfficeIdRef.current = currentOfficeId; }, [currentOfficeId]);
   useEffect(() => { currentOfficeNameRef.current = currentOfficeName; }, [currentOfficeName]);
   useEffect(() => { currentOfficeOwnerIdRef.current = currentOfficeOwnerId; }, [currentOfficeOwnerId]);
   useEffect(() => { currentOfficeOwnerNameRef.current = currentOfficeOwnerName; }, [currentOfficeOwnerName]);
+  useEffect(() => { officeOwnerPreviewRef.current = officeOwnerPreview; }, [officeOwnerPreview]);
 
   const openBugReport = useCallback(() => {
     const userAgent = typeof window !== "undefined" ? window.navigator.userAgent : "unknown";
@@ -754,12 +756,16 @@ function GamePageInner() {
   useEffect(() => {
     if (!character || !currentOfficeId) return;
 
+    const officeIdAtSubscribe = currentOfficeId;
     const savedPos = getOfficePlayerPosition(currentOfficeId) ?? undefined;
     const sm = new SupabaseMultiplayer(character.id || crypto.randomUUID(), `office:${currentOfficeId}`);
     supabaseMultiplayer.current = sm;
     setSupabaseStatus("connecting");
 
+    const isStaleSubscription = () => currentOfficeIdRef.current !== officeIdAtSubscribe || supabaseMultiplayer.current !== sm;
+
     sm.on('player:joined', (data) => {
+      if (isStaleSubscription()) return;
       const p = data as PlayerPresence;
       if (p.position) remotePlayerPositions.current.set(p.playerId, p.position);
       setOfficeOwnerPreview((prev) => prev && prev.id === p.playerId ? { ...prev, offline: false, position: p.position ?? prev.position } : prev);
@@ -773,10 +779,12 @@ function GamePageInner() {
     });
 
     sm.on('player:left', (data) => {
+      if (isStaleSubscription()) return;
       const p = data as { playerId: string };
       setOfficeOwnerPreview((prev) => prev && prev.id === p.playerId ? { ...prev, offline: true } : prev);
       setChannelPlayers(prev => {
-        const next = prev.filter(x => x.id !== p.playerId || x.id === officeOwnerPreview?.id);
+        const currentOwnerPreview = officeOwnerPreviewRef.current;
+        const next = prev.filter(x => x.id !== p.playerId || x.id === currentOwnerPreview?.id);
         const onlineIds = next.map(x => x.id).filter(id => id !== '__self__');
         getOfflinePlayers([character.id, ...onlineIds]).then(setOfflinePlayers).catch(() => {});
         return next;
@@ -785,6 +793,7 @@ function GamePageInner() {
     });
 
     sm.on('presence:sync', (data) => {
+      if (isStaleSubscription()) return;
       const state = data as Record<string, PlayerPresence[]>;
       const players = Object.entries(state).map(([id, presences]) => ({
         id,
@@ -804,8 +813,9 @@ function GamePageInner() {
       });
       setChannelPlayers(prev => {
         const self = prev.find(p => p.id === '__self__');
-        const placeholderOwner = officeOwnerPreview && !players.some((p) => p.id === officeOwnerPreview.id)
-          ? [{ id: officeOwnerPreview.id, name: officeOwnerPreview.name, appearance: officeOwnerPreview.appearance }]
+        const currentOwnerPreview = officeOwnerPreviewRef.current;
+        const placeholderOwner = currentOwnerPreview && !players.some((p) => p.id === currentOwnerPreview.id)
+          ? [{ id: currentOwnerPreview.id, name: currentOwnerPreview.name, appearance: currentOwnerPreview.appearance }]
           : [];
         const others = players.filter(p => p.id !== character.id);
         const next = self ? [self, ...placeholderOwner, ...others.filter((p, index, arr) => arr.findIndex(x => x.id === p.id) === index)] : [...placeholderOwner, ...others];
@@ -816,6 +826,7 @@ function GamePageInner() {
     });
 
     sm.on('chat:message', (data) => {
+      if (isStaleSubscription()) return;
       const msg = data as ChannelChatMessage;
       setChannelMessages(prev => [...prev, msg]);
       if (!channelChatOpenRef.current) {
@@ -824,6 +835,7 @@ function GamePageInner() {
     });
 
     sm.on('player:moved', (data) => {
+      if (isStaleSubscription()) return;
       const { playerId, x, y } = data as { playerId: string; x: number; y: number };
       remotePlayerPositions.current.set(playerId, { x, y });
       EventBus.emit('player:moved', { playerId, x, y });
@@ -835,8 +847,12 @@ function GamePageInner() {
       appearance: character.appearance,
       position: savedPos,
     })
-      .then(() => setSupabaseStatus("connected"))
-      .catch(() => setSupabaseStatus("error"));
+      .then(() => {
+        if (!isStaleSubscription()) setSupabaseStatus("connected");
+      })
+      .catch(() => {
+        if (!isStaleSubscription()) setSupabaseStatus("error");
+      });
 
     return () => {
       sm.disconnect();
@@ -996,6 +1012,20 @@ function GamePageInner() {
       });
     };
 
+    const handlePlayerContextMenu = (data: { playerId: string; playerName: string; screenX: number; screenY: number; offline?: boolean }) => {
+      setContextMenu(null);
+      setRosterActionMenu({
+        type: "player",
+        playerId: data.playerId,
+        playerName: data.playerName,
+        x: data.screenX,
+        y: data.screenY,
+      });
+      if (data.playerId && officeOwnerPreviewRef.current?.id === data.playerId) {
+        setOfficeOwnerPreview((prev) => prev ? { ...prev, offline: data.offline ?? prev.offline } : prev);
+      }
+    };
+
     const handleMovementStarted = (data: { npcId: string }) => {
       setNpcMoveStates(prev => ({ ...prev, [data.npcId]: "moving-to-player" }));
     };
@@ -1041,6 +1071,7 @@ function GamePageInner() {
     EventBus.on("toast:show", handleToastShow);
     EventBus.on("toast:hide", handleToastHide);
     EventBus.on("npc:context-menu", handleContextMenu);
+    EventBus.on("player:context-menu", handlePlayerContextMenu);
     EventBus.on("npc:call-to-player", handleMovementStarted);
     EventBus.on("npc:movement-arrived", handleMovementArrived);
     EventBus.on("npc:movement-returned", handleMovementReturned);
@@ -1055,6 +1086,7 @@ function GamePageInner() {
       EventBus.off("toast:show", handleToastShow);
       EventBus.off("toast:hide", handleToastHide);
       EventBus.off("npc:context-menu", handleContextMenu);
+      EventBus.off("player:context-menu", handlePlayerContextMenu);
       EventBus.off("npc:call-to-player", handleMovementStarted);
       EventBus.off("npc:movement-arrived", handleMovementArrived);
       EventBus.off("npc:movement-returned", handleMovementReturned);
