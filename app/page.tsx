@@ -297,6 +297,13 @@ function GamePageInner() {
   const [homeOfficeId, setHomeOfficeId] = useState<string>("default");
   const [homeOfficeName, setHomeOfficeName] = useState<string>("Office");
   const [visitingOfficeNotice, setVisitingOfficeNotice] = useState<string | null>(null);
+  const [officeOwnerPreview, setOfficeOwnerPreview] = useState<{
+    id: string;
+    name: string;
+    appearance: CharacterAppearance | LegacyCharacterAppearance | null;
+    position: { x: number; y: number } | null;
+    offline: boolean;
+  } | null>(null);
   const [showHireModal, setShowHireModal] = useState(false);
   const [placementMode, setPlacementMode] = useState(false);
   const [spawnSetMode, setSpawnSetMode] = useState(false);
@@ -360,6 +367,8 @@ function GamePageInner() {
     officeName: string;
     ownerPlayerId: string;
     ownerPlayerName: string;
+    ownerAppearance?: CharacterAppearance | LegacyCharacterAppearance | null;
+    ownerOffline?: boolean;
     channel: LocalChannel | null;
     npcs: LocalNpc[];
     tasks: LocalTask[];
@@ -391,6 +400,25 @@ function GamePageInner() {
     setGameChannelData(pending);
     setChannelNpcs(seed.npcs.map((npc) => ({ id: npc.id, name: npc.name, appearance: npc.appearance })));
     setAllTasks(seed.tasks);
+    setChannelPlayers([
+      {
+        id: "__self__",
+        name: currentPlayer.name,
+        appearance: currentPlayer.appearance ?? null,
+      },
+      ...(runtime.isVisiting ? [{
+        id: seed.ownerPlayerId,
+        name: seed.ownerPlayerName,
+        appearance: seed.ownerAppearance ?? null,
+      }] : []),
+    ]);
+    setOfficeOwnerPreview(runtime.isVisiting ? {
+      id: seed.ownerPlayerId,
+      name: seed.ownerPlayerName,
+      appearance: seed.ownerAppearance ?? null,
+      position: seed.savedPosition,
+      offline: seed.ownerOffline ?? false,
+    } : null);
     remotePlayerPositions.current.clear();
     EventBus.emit("channel-data-ready", pending);
   }, []);
@@ -574,6 +602,8 @@ function GamePageInner() {
           officeName: savedChannel.name || homeName,
           ownerPlayerId: char.id,
           ownerPlayerName: char.name,
+          ownerAppearance: char.appearance,
+          ownerOffline: false,
           channel: savedChannel,
           npcs: savedNpcs,
           tasks: savedTasks,
@@ -608,6 +638,8 @@ function GamePageInner() {
             officeName: homeName,
             ownerPlayerId: char.id,
             ownerPlayerName: char.name,
+            ownerAppearance: char.appearance,
+            ownerOffline: false,
             channel: fallbackChannel,
             npcs: savedNpcs,
             tasks: savedTasks,
@@ -636,6 +668,8 @@ function GamePageInner() {
             officeName: homeName,
             ownerPlayerId: char.id,
             ownerPlayerName: char.name,
+            ownerAppearance: char.appearance,
+            ownerOffline: false,
             channel: fallbackChannel,
             npcs: savedNpcs,
             tasks: savedTasks,
@@ -720,17 +754,15 @@ function GamePageInner() {
     const sm = new SupabaseMultiplayer(character.id || crypto.randomUUID(), `office:${currentOfficeId}`);
     supabaseMultiplayer.current = sm;
     setSupabaseStatus("connecting");
-    setChannelPlayers([{
-      id: "__self__",
-      name: character.name,
-      appearance: character.appearance ?? null,
-    }]);
 
     sm.on('player:joined', (data) => {
       const p = data as PlayerPresence;
       if (p.position) remotePlayerPositions.current.set(p.playerId, p.position);
+      setOfficeOwnerPreview((prev) => prev && prev.id === p.playerId ? { ...prev, offline: false, position: p.position ?? prev.position } : prev);
       setChannelPlayers(prev => {
-        if (prev.some(x => x.id === p.playerId)) return prev;
+        if (prev.some(x => x.id === p.playerId)) {
+          return prev.map((x) => x.id === p.playerId ? { ...x, name: p.name, appearance: p.appearance as CharacterAppearance | LegacyCharacterAppearance | null } : x);
+        }
         return [...prev, { id: p.playerId, name: p.name, appearance: p.appearance as CharacterAppearance | LegacyCharacterAppearance | null }];
       });
       EventBus.emit('player:joined', p);
@@ -738,8 +770,9 @@ function GamePageInner() {
 
     sm.on('player:left', (data) => {
       const p = data as { playerId: string };
+      setOfficeOwnerPreview((prev) => prev && prev.id === p.playerId ? { ...prev, offline: true } : prev);
       setChannelPlayers(prev => {
-        const next = prev.filter(x => x.id !== p.playerId);
+        const next = prev.filter(x => x.id !== p.playerId || x.id === officeOwnerPreview?.id);
         const onlineIds = next.map(x => x.id).filter(id => id !== '__self__');
         getOfflinePlayers([character.id, ...onlineIds]).then(setOfflinePlayers).catch(() => {});
         return next;
@@ -758,10 +791,20 @@ function GamePageInner() {
       players.forEach(p => {
         if (p.position) remotePlayerPositions.current.set(p.id, p.position);
       });
+      setOfficeOwnerPreview((prev) => {
+        if (!prev) return prev;
+        const liveOwner = players.find((p) => p.id === prev.id);
+        return liveOwner
+          ? { ...prev, offline: false, appearance: liveOwner.appearance, position: liveOwner.position ?? prev.position }
+          : { ...prev, offline: true };
+      });
       setChannelPlayers(prev => {
         const self = prev.find(p => p.id === '__self__');
+        const placeholderOwner = officeOwnerPreview && !players.some((p) => p.id === officeOwnerPreview.id)
+          ? [{ id: officeOwnerPreview.id, name: officeOwnerPreview.name, appearance: officeOwnerPreview.appearance }]
+          : [];
         const others = players.filter(p => p.id !== character.id);
-        const next = self ? [self, ...others] : others;
+        const next = self ? [self, ...placeholderOwner, ...others.filter((p, index, arr) => arr.findIndex(x => x.id === p.id) === index)] : [...placeholderOwner, ...others];
         const onlineIds = [character.id, ...others.map(x => x.id)];
         getOfflinePlayers(onlineIds).then(setOfflinePlayers).catch(() => {});
         return next;
@@ -1077,6 +1120,8 @@ function GamePageInner() {
     officeName?: string | null;
     ownerPlayerId: string;
     ownerPlayerName: string;
+    ownerAppearance?: CharacterAppearance | LegacyCharacterAppearance | null;
+    ownerOffline?: boolean;
     preferredSavedPosition?: { x: number; y: number } | null;
     officeRecord?: PlayerOfficeRecord | null;
   }) => {
@@ -1135,6 +1180,8 @@ function GamePageInner() {
       officeName: target.officeName ?? officeRecord.office_name,
       ownerPlayerId: target.ownerPlayerId,
       ownerPlayerName: target.ownerPlayerName,
+      ownerAppearance: target.ownerAppearance ?? null,
+      ownerOffline: target.ownerOffline ?? false,
       channel: seed.channel,
       npcs: seed.npcs,
       tasks: seed.tasks,
@@ -1185,6 +1232,8 @@ function GamePageInner() {
       officeName: player.office_name ?? getDefaultOfficeName(player.name),
       ownerPlayerId: player.office_owner_id ?? player.id,
       ownerPlayerName: player.name,
+      ownerAppearance: player.appearance as CharacterAppearance | LegacyCharacterAppearance | null,
+      ownerOffline: false,
       preferredSavedPosition: fallbackPos ?? player.last_position,
     });
 
@@ -1201,6 +1250,8 @@ function GamePageInner() {
       officeName: player.office_name ?? getDefaultOfficeName(player.name),
       ownerPlayerId: player.office_owner_id ?? player.id,
       ownerPlayerName: player.name,
+      ownerAppearance: player.appearance as CharacterAppearance | LegacyCharacterAppearance | null,
+      ownerOffline: true,
       preferredSavedPosition: player.last_position,
     });
 
@@ -1523,10 +1574,19 @@ function GamePageInner() {
   useEffect(() => {
     const onSceneReady = () => {
       EventBus.emit("owner-status", { isOwner });
+      if (officeOwnerPreview && officeOwnerPreview.id !== character?.id) {
+        EventBus.emit("player:joined", {
+          playerId: officeOwnerPreview.id,
+          name: officeOwnerPreview.name,
+          appearance: officeOwnerPreview.appearance,
+          position: officeOwnerPreview.position ?? undefined,
+          offline: officeOwnerPreview.offline,
+        });
+      }
     };
     EventBus.on("scene-ready", onSceneReady);
     return () => { EventBus.off("scene-ready", onSceneReady); };
-  }, [isOwner]);
+  }, [character?.id, isOwner, officeOwnerPreview]);
 
   // Forward local player movement to Supabase for cross-machine sync
   // Also throttle position writes to player_registry (max once per 15s)

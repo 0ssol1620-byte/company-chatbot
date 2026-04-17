@@ -1277,6 +1277,34 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
+    // Remote player sync from React/Supabase presence
+    EventBus.on("player:joined", (data: { playerId: string; name: string; appearance: unknown; position?: { x: number; y: number } }) => {
+      const joined = data;
+      const position = joined.position ?? { x: TILE_SIZE * 10, y: TILE_SIZE * 7 };
+      this.addRemotePlayer({
+        id: joined.playerId,
+        characterName: joined.name,
+        appearance: joined.appearance,
+        x: position.x,
+        y: position.y,
+        direction: "down",
+        animation: "idle",
+      });
+    });
+    EventBus.on("player:left", (data: { playerId: string }) => {
+      const remote = this.remotePlayers.get(data.playerId);
+      if (remote) {
+        remote.destroy();
+        this.remotePlayers.delete(data.playerId);
+      }
+    });
+    EventBus.on("player:moved", (data: { playerId: string; x: number; y: number }) => {
+      const remote = this.remotePlayers.get(data.playerId);
+      if (remote) {
+        remote.updatePosition(data.x, data.y, "down", "idle");
+      }
+    });
+
     // Editor zoom control from React panel
     EventBus.on("editor:set-zoom", (data: { zoom: number }) => {
       const z = Math.max(0.5, Math.min(4, data.zoom));
