@@ -256,6 +256,7 @@ function GamePageInner() {
   // Channel chat state
   const [channelMessages, setChannelMessages] = useState<ChannelChatMessage[]>([]);
   const [channelChatOpen, setChannelChatOpen] = useState(false);
+  const [playerChatTarget, setPlayerChatTarget] = useState<{ id: string; name: string; offline?: boolean } | null>(null);
   const channelChatOpenRef = useRef(false);
   const [channelChatInputDisabled, setChannelChatInputDisabled] = useState(false);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
@@ -1047,15 +1048,12 @@ function GamePageInner() {
         offline: data?.offline ?? null,
       });
       resetDialog();
-      if (data?.playerId && data.offline) {
-        setOfflineMsgTarget({ id: data.playerId, name: data.playerName || "Player" });
-        setOfflineMsgText("");
-        setChannelChatOpen(false);
-        setChannelChatInputDisabled(true);
-        setUnreadChatCount(0);
-        EventBus.emit("dialog:open");
-        return;
-      }
+      setChannelMessages([]);
+      setPlayerChatTarget(data?.playerId ? {
+        id: data.playerId,
+        name: data.playerName || "Player",
+        offline: data.offline ?? false,
+      } : null);
       setChannelChatOpen(true);
       setChannelChatInputDisabled(false);
       setUnreadChatCount(0);
@@ -1178,6 +1176,8 @@ function GamePageInner() {
 
   const handleDialogClose = useCallback(() => {
     resetDialog();
+    setChannelChatOpen(false);
+    setPlayerChatTarget(null);
     EventBus.emit("dialog:close");
   }, [resetDialog]);
 
@@ -1729,7 +1729,36 @@ function GamePageInner() {
     }
   }, [dialogNpc, isNpcStreaming, showToastNotification, t]);
 
-  const handleChannelChatSend = useCallback((message: string) => {
+  const handleChannelChatSend = useCallback(async (message: string) => {
+    if (playerChatTarget?.offline) {
+      if (!character || !message.trim()) return;
+      appendOfficeTrace("player-chat:offline-send", {
+        playerId: playerChatTarget.id,
+        playerName: playerChatTarget.name,
+      });
+      const msg: ChannelChatMessage = {
+        id: crypto.randomUUID(),
+        senderId: character.id,
+        sender: character.name,
+        content: message,
+        timestamp: Date.now(),
+      };
+      setChannelMessages(prev => [...prev, msg]);
+      const ok = await sendOfflineMessage({
+        toPlayerId: playerChatTarget.id,
+        fromPlayerId: character.id,
+        fromPlayerName: character.name,
+        content: message.trim(),
+      });
+      if (ok) {
+        showToastNotification(`offline-msg-sent-${Date.now()}`, t("game.leaveMessageSent"));
+      } else {
+        setChannelMessages(prev => prev.filter(entry => entry.id !== msg.id));
+        showToastNotification(`offline-msg-fail-${Date.now()}`, t("game.leaveMessageFailed"));
+      }
+      return;
+    }
+
     const msg: ChannelChatMessage = {
       id: crypto.randomUUID(),
       senderId: character?.id || "local",
@@ -1741,7 +1770,7 @@ function GamePageInner() {
     EventBus.emit("chat:bubble", { senderId: msg.senderId });
     // Broadcast to all players across machines
     supabaseMultiplayer.current?.emit('chat:message', msg as unknown as Record<string, unknown>).catch(console.error);
-  }, [character]);
+  }, [character, playerChatTarget, showToastNotification, t]);
 
   // Emit owner status when scene is ready
   useEffect(() => {
@@ -2584,8 +2613,10 @@ function GamePageInner() {
         }}
         onMessage={(player) => {
           setShowDirectory(false);
-          setOfflineMsgTarget({ id: player.id, name: player.name });
-          setOfflineMsgText("");
+          setChannelMessages([]);
+          setPlayerChatTarget({ id: player.id, name: player.name, offline: true });
+          setChannelChatOpen(true);
+          setChannelChatInputDisabled(false);
         }}
         inbox={inbox}
         onMarkInboxRead={handleMarkInboxRead}
@@ -2692,6 +2723,8 @@ function GamePageInner() {
             channelChatInputDisabled={channelChatInputDisabled}
             onSendChannelChat={handleChannelChatSend}
             currentPlayerName={character?.name}
+            playerChatTarget={playerChatTarget}
+            channelChatPlaceholder={playerChatTarget?.offline ? `${playerChatTarget.name}님에게 남길 메시지를 입력하세요` : undefined}
             npcMoveState={dialogNpc ? npcMoveStates[dialogNpc.npcId] : undefined}
             onReturnNpc={dialogNpc ? handleReturnNpc : undefined}
             socket={null}

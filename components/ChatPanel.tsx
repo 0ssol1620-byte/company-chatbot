@@ -38,12 +38,14 @@ interface ChatPanelProps {
   onRequestReportTask?: (taskId: string) => void;
   onResumeTask?: (taskId: string) => void;
   onCompleteTask?: (taskId: string) => void;
-  // Channel chat
+  // Channel / player chat
   channelMessages: ChannelChatMessage[];
   channelChatOpen?: boolean;
   channelChatInputDisabled?: boolean;
   onSendChannelChat: (message: string) => void;
   currentPlayerName?: string;
+  playerChatTarget?: { id: string; name: string; offline?: boolean } | null;
+  channelChatPlaceholder?: string;
 }
 
 const MIN_WIDTH = 250;
@@ -54,6 +56,7 @@ export default function ChatPanel({
   dialogNpc, npcMessages, isNpcStreaming, npcChatInputDisabled, npcChatDisabledPlaceholder, onSend, onClose,
   npcSelectList, onSelectNpc, isOwner, onEditNpc, onFireNpc, onResetNpcChat,
   channelMessages, channelChatOpen, channelChatInputDisabled, onSendChannelChat, currentPlayerName,
+  playerChatTarget, channelChatPlaceholder,
   npcMoveState, onReturnNpc, socket, onDeleteTask, onRequestReportTask, onResumeTask, onCompleteTask,
 }: ChatPanelProps) {
   const [width, setWidth] = useState(DEFAULT_WIDTH);
@@ -162,7 +165,7 @@ export default function ChatPanel({
             &#9664;
           </button>
           <span className="text-sm font-bold text-text-secondary">
-            {inNpcDialog ? dialogNpc.npcName : t("chat.title")}
+            {inNpcDialog ? dialogNpc.npcName : (playerChatTarget ? playerChatTarget.name : t("chat.title"))}
           </span>
           {inNpcDialog ? (
             <>
@@ -284,10 +287,21 @@ export default function ChatPanel({
         ) : (
           // Channel chat mode
           <>
+            {playerChatTarget && (
+              <div className={`mx-3 mt-3 mb-1 rounded-lg border px-3 py-2 text-xs ${
+                playerChatTarget.offline
+                  ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                  : "border-sky-500/30 bg-sky-500/10 text-sky-200"
+              }`}>
+                {playerChatTarget.offline
+                  ? `${playerChatTarget.name}님은 현재 오프라인 상태입니다. 이 패널에서 보내면 메시지가 전달됩니다.`
+                  : `${playerChatTarget.name}에게 메시지를 보냅니다.`}
+              </div>
+            )}
             <div ref={channelScrollRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-1.5">
               {channelMessages.length === 0 && (
                 <div className="text-text-dim text-sm italic py-4 text-center">
-                  {t("chat.noMessages")}
+                  {playerChatTarget?.offline ? `${playerChatTarget.name}님에게 남길 메시지를 입력해보세요.` : t("chat.noMessages")}
                 </div>
               )}
               {channelMessages.map((msg) => {
@@ -299,7 +313,7 @@ export default function ChatPanel({
                 );
               })}
             </div>
-            <ChatInput onSend={onSendChannelChat} placeholder={channelChatInputDisabled ? t("chat.moveCloser") : t("chat.placeholder")} disabled={!!channelChatInputDisabled} autoFocus />
+            <ChatInput onSend={onSendChannelChat} placeholder={channelChatInputDisabled ? t("chat.moveCloser") : (channelChatPlaceholder ?? t("chat.placeholder"))} disabled={!!channelChatInputDisabled} autoFocus />
           </>
         )}
       </div>
