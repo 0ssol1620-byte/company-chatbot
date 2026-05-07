@@ -927,14 +927,22 @@ export class GameScene extends Phaser.Scene {
     this.currentMapPixelHeight = mapHeight;
     this.physics.world.setBounds(0, 0, mapWidth, mapHeight);
 
+    // In editor mode the React sidebar occupies the left 256px of the viewport.
+    // Shrink the camera viewport so the map renders only in the visible area.
+    const sidebarWidth = this.editorMode ? 256 : 0;
+    const viewW = (this.cameras.main.width - sidebarWidth);
+    const viewH = this.cameras.main.height;
+
     const bounds = getCenteredCameraBounds({
-      viewportWidth: this.cameras.main.width,
-      viewportHeight: this.cameras.main.height,
+      viewportWidth: viewW,
+      viewportHeight: viewH,
       zoom: this.cameras.main.zoom || MAIN_CAMERA_ZOOM,
       mapWidth,
       mapHeight,
     });
 
+    // Offset bounds by sidebar width so the camera pans within the right area
+    this.cameras.main.setViewport(sidebarWidth, 0, viewW, viewH);
     this.cameras.main.setBounds(bounds.x, bounds.y, bounds.width, bounds.height);
   }
 
@@ -2389,6 +2397,9 @@ export class GameScene extends Phaser.Scene {
 
   private toggleEditor(): void {
     this.editorMode = !this.editorMode;
+
+    // Recalculate camera viewport — editor panel takes 256px on the left
+    this.applyMainCameraBounds(this.currentMapPixelWidth, this.currentMapPixelHeight);
 
     if (this.editorMode) {
       this.showEditor();
