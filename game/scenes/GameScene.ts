@@ -2425,17 +2425,22 @@ export class GameScene extends Phaser.Scene {
       this.editorCursor.setDepth(20020);
     }
 
-    // Toolbar container (fixed to camera via scrollFactor)
-    if (!this.editorToolbar) {
-      this.editorToolbar = this.add.container(0, 0);
-      this.editorToolbar.setDepth(20020);
-      this.editorToolbar.setScrollFactor(0);
-      // Counter-act camera zoom so children use screen-pixel coordinates
-      this.editorToolbar.setScale(1 / cam.zoom);
-
-      this.buildToolbar();
+    // Toolbar container — only used in legacy (non-Tiled) mode.
+    // In Tiled mode the React MapEditorPanel sidebar handles all UI,
+    // so we skip the Phaser bottom bar to avoid it covering map tiles.
+    if (!this.tiledMode) {
+      if (!this.editorToolbar) {
+        this.editorToolbar = this.add.container(0, 0);
+        this.editorToolbar.setDepth(20020);
+        this.editorToolbar.setScrollFactor(0);
+        this.editorToolbar.setScale(1 / cam.zoom);
+        this.buildToolbar();
+      }
+      this.editorToolbar.setVisible(true);
+    } else if (this.editorToolbar) {
+      // Hide legacy toolbar when switching to Tiled mode
+      this.editorToolbar.setVisible(false);
     }
-    this.editorToolbar.setVisible(true);
 
     // Layer indicator — positioned to the right of the React sidebar (≥ 264px from left)
     if (!this.editorLayerText) {
