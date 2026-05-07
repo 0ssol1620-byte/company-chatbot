@@ -371,6 +371,15 @@ input::placeholder, textarea::placeholder {
   animation: pageFadeIn 0.25s ease-out;
 }
 
+/* Fade-in utility (로딩→게임 전환, 에러화면 등) */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
 /* Glow effect on active/focused elements */
 .glow-gold {
   box-shadow: 0 0 8px rgba(255, 215, 0, 0.4);

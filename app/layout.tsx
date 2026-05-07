@@ -20,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko" className={`${inter.variable} h-full`}>
-      <body className="min-h-full flex flex-col">
+      <body className="h-full">
         <I18nProvider initialLocale="ko">
           {children}
         </I18nProvider>

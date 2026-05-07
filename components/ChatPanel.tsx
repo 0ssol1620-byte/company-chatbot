@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { useT } from "@/lib/i18n";
-import { Pencil, UserMinus, RotateCcw, MessageSquare, ClipboardList, Undo2 } from "lucide-react";
+import { Pencil, UserMinus, RotateCcw, MessageSquare, ClipboardList, Undo2, Maximize2, Minimize2 } from "lucide-react";
 import type { NpcChatMessage } from "./NpcDialog";
 import TaskPanel from "./TaskPanel";
 import ChatInput from "./ChatInput";
@@ -62,6 +62,7 @@ export default function ChatPanel({
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [manualOpen, setManualOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [showGearMenu, setShowGearMenu] = useState(false);
   const [activeTabState, setActiveTabState] = useState<{ npcId: string | null; tab: "chat" | "tasks" }>({
     npcId: null,
@@ -145,8 +146,10 @@ export default function ChatPanel({
   return (
     <div
       ref={panelRef}
-      className="fixed left-0 top-[40px] bottom-0 z-20 flex"
-      style={{ width }}
+      className={`fixed left-0 z-20 flex transition-all duration-200 ${
+        isFullscreen ? "inset-0 top-0" : "top-[40px] bottom-0"
+      }`}
+      style={isFullscreen ? { width: "100vw" } : { width }}
     >
       {/* Panel content */}
       <div className="flex-1 flex flex-col bg-bg/95 backdrop-blur border-r border-border min-w-0">
@@ -167,7 +170,16 @@ export default function ChatPanel({
           <span className="text-sm font-bold text-text-secondary">
             {inNpcDialog ? dialogNpc.npcName : (playerChatTarget ? playerChatTarget.name : t("chat.title"))}
           </span>
-          {inNpcDialog ? (
+          <div className="flex items-center gap-1">
+            {/* 전체화면 토글 */}
+            <button
+              onClick={() => setIsFullscreen((v) => !v)}
+              className="text-text-muted hover:text-text p-1 rounded hover:bg-white/10 transition-colors"
+              title={isFullscreen ? "창 축소" : "전체화면으로 확대"}
+            >
+              {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            </button>
+            {inNpcDialog ? (
             <>
             {npcMoveState === "waiting" && onReturnNpc && (
               <button
@@ -214,9 +226,8 @@ export default function ChatPanel({
               )}
             </div>
             </>
-          ) : (
-            <div className="w-4" />
-          )}
+          ) : null}
+          </div>
         </div>
 
         {/* Chat content */}
@@ -318,7 +329,8 @@ export default function ChatPanel({
         )}
       </div>
 
-      {/* Drag handle */}
+      {/* Drag handle — 전체화면 모드에서는 숨김 */}
+      {!isFullscreen && (
       <div
         onMouseDown={handleMouseDown}
         className={`w-2 cursor-col-resize flex items-center justify-center hover:bg-primary/30 transition ${
@@ -327,6 +339,7 @@ export default function ChatPanel({
       >
         <div className="w-0.5 h-8 bg-text-dim rounded" />
       </div>
+      )}
     </div>
   );
 }

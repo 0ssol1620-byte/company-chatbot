@@ -93,14 +93,38 @@ const AVATAR_ASSET_CREDITS_URL = "/assets/spritesheets/CREDITS.md";
 const AVATAR_ASSET_LICENSE_URL = "/assets/spritesheets/LICENSE-assets.md";
 const INSTANCE_ID_STORAGE_KEY = "deskrpg.instanceId";
 
-function GameEngineLoading() {
-  const t = useT();
-
+function LoadingScreen({ step }: { step?: string }) {
   return (
-    <div className="fixed inset-0 bg-gray-800 flex items-center justify-center text-gray-400">
-      {t("game.loadingEngine")}
+    <div className="fixed inset-0 bg-gray-900 flex items-center justify-center z-50 animate-fadeIn">
+      <div className="text-center space-y-5">
+        {/* Pixel spinner */}
+        <div className="flex justify-center">
+          <div className="pixel-spinner mx-auto" style={{ width: 36, height: 36, borderWidth: 4 }} />
+        </div>
+        <div className="text-white text-lg font-semibold tracking-wide">
+          {step ?? "로딩 중..."}
+        </div>
+        {/* Step dots */}
+        <div className="flex justify-center gap-1.5">
+          {["캐릭터", "맵", "게임엔진"].map((s, i) => (
+            <span
+              key={s}
+              className="w-2 h-2 rounded-full"
+              style={{
+                background: step?.includes(s) ? "#ffd700" : "#374151",
+                animation: step?.includes(s) ? "pulse 1s infinite" : "none",
+              }}
+            />
+          ))}
+        </div>
+        <div className="text-gray-500 text-xs">잠시만 기다려주세요</div>
+      </div>
     </div>
   );
+}
+
+function GameEngineLoading() {
+  return <LoadingScreen step="게임엔진 로딩 중..." />;
 }
 
 // Import PhaserGame with SSR disabled — Phaser requires browser APIs
@@ -1987,34 +2011,50 @@ function GamePageInner() {
   }, [contextMenu, rosterActionMenu]);
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
-        <div className="text-center">
-          <div className="text-xl mb-2">{t("common.loadingGame")}</div>
-          <div className="text-gray-400">{t("common.preparingCharacter")}</div>
-        </div>
-      </div>
-    );
+    return <LoadingScreen step="캐릭터 준비 중..." />;
   }
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
-        <div className="text-center">
-          <div className="text-xl mb-4 text-red-400">{error}</div>
-          <Link
-            href="/setup"
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded font-semibold"
-          >
-            {t("common.backToCharacters")}
-          </Link>
+      <div className="fixed inset-0 flex items-center justify-center bg-gray-900 text-white animate-fadeIn">
+        <div className="text-center space-y-4 px-6">
+          <div className="text-4xl">⚠️</div>
+          <div className="text-xl text-red-400 font-semibold">{error}</div>
+          <div className="flex gap-3 justify-center mt-2">
+            <button
+              onClick={() => { setError(null); setLoading(true); window.location.reload(); }}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded font-semibold text-sm transition-colors"
+            >
+              🔄 다시 시도
+            </button>
+            <Link
+              href="/setup"
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded font-semibold text-sm transition-colors"
+            >
+              {t("common.backToCharacters")}
+            </Link>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-gray-900 text-white">
+    <div className="h-screen w-screen overflow-hidden bg-gray-900 text-white animate-fadeIn">
+      {/* 모바일 경고 오버레이 */}
+      <div className="md:hidden fixed inset-0 z-[9999] bg-gray-900 flex items-center justify-center p-6">
+        <div className="text-center space-y-4">
+          <div className="text-5xl">🖥️</div>
+          <div className="text-white font-bold text-lg">PC에서 이용해주세요</div>
+          <div className="text-gray-400 text-sm">이 서비스는 PC 환경에 최적화되어 있습니다.<br />모바일에서는 정상적으로 동작하지 않을 수 있습니다.</div>
+          <button
+            onClick={(e) => (e.currentTarget.closest("div.md\\:hidden") as HTMLElement | null)?.remove()}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-300 transition-colors"
+          >
+            그래도 계속하기
+          </button>
+        </div>
+      </div>
       {/* Game canvas — full screen background (hidden when in meeting mode) */}
       <div style={{ visibility: mode === "office" ? "visible" : "hidden", position: mode === "office" ? "relative" : "absolute", pointerEvents: mode === "office" ? "auto" : "none" }}>
         {spritesheetDataUrl && character && gameChannelData && (
