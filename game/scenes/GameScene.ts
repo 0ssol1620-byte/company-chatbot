@@ -873,9 +873,19 @@ export class GameScene extends Phaser.Scene {
   private tiledSpawnRow: number | null = null;
   private savedPosition: { x: number; y: number } | null = null;
 
+  // Collision layer reference (shown only in editor mode)
+  private collisionLayerRef: Phaser.Tilemaps.TilemapLayer | null = null;
+
+  // Editor undo/redo
+  private editorUndoStack: Array<{ layer: 'floor'|'walls', tileX: number, tileY: number, oldGid: number, newGid: number }[]> = [];
+  private editorRedoStack: Array<{ layer: 'floor'|'walls', tileX: number, tileY: number, oldGid: number, newGid: number }[]> = [];
+  private editorPaintBatch: { layer: 'floor'|'walls', tileX: number, tileY: number, oldGid: number, newGid: number }[] = [];
+  private editorIsPainting = false;
+
   // Editor stamp state (for tile painting on Tiled layers)
   private selectedStampGid = 0; // 0 = none, -1 = erase
   private selectedStampLayer: "floor" | "walls" | "foreground" = "floor";
+  private stampRegion: { gids: number[][]; width: number; height: number } | null = null;
 
   // Sitting mechanic
   private isSitting = false;
@@ -1277,9 +1287,10 @@ export class GameScene extends Phaser.Scene {
     this.bindEventBus("toggle-editor", () => this.toggleEditor());
 
     // React tile picker → GameScene stamp selection
-    this.bindEventBus("editor:select-stamp", (data: { gid: number; layer: string }) => {
+    this.bindEventBus("editor:select-stamp", (data: { gid: number; layer: string; region?: { gids: number[][], width: number, height: number } }) => {
       this.selectedStampGid = data.gid;
       this.selectedStampLayer = (data.layer || "floor") as "floor" | "walls" | "foreground";
+      this.stampRegion = data.region ?? null;
       this.editorObjectMode = false; // switch away from object placement
       if (this.editorObjectPreview) { this.editorObjectPreview.destroy(); this.editorObjectPreview = null; }
       this.updateLayerText();
@@ -1288,6 +1299,48 @@ export class GameScene extends Phaser.Scene {
     // Save from React sidebar button
     this.bindEventBus("editor:save-map", () => {
       if (this.editorMode) this.saveMap();
+    });
+
+    // Collision layer visibility toggle (editor panel)
+    this.bindEventBus("editor:toggle-collision-layer", (data: { visible: boolean }) => {
+      if (this.collisionLayerRef) this.collisionLayerRef.setAlpha(data.visible ? 0.5 : 0);
+    });
+
+    // Editor undo/redo
+    this.bindEventBus("editor:undo", () => this.editorUndo());
+    this.bindEventBus("editor:redo", () => this.editorRedo());
+
+    // Layer management (PATCH 7)
+    this.bindEventBus("editor:set-active-layer", (data: { layerName: string }) => {
+      this.selectedStampLayer = data.layerName as 'floor'|'walls'|'foreground';
+      this.updateLayerText();
+    });
+
+    this.bindEventBus("editor:toggle-layer-visibility", (data: { layerName: string; visible: boolean }) => {
+      const name = data.layerName.toLowerCase();
+      if (name === 'floor' && this.floorLayer) this.floorLayer.setVisible(data.visible);
+      else if (name === 'walls' && this.wallsLayer) this.wallsLayer.setVisible(data.visible);
+      // foreground: handled via alpha toggle (future)
+    });
+
+    // Set active tool (PATCH 9)
+    this.bindEventBus("editor:set-tool", (data: { tool: string }) => {
+      if (data.tool === 'erase') {
+        this.selectedStampGid = -1;
+        EventBus.emit('editor:select-stamp', { gid: -1, layer: this.selectedStampLayer });
+      } else if (data.tool === 'stamp') {
+        if (this.selectedStampGid <= 0) this.selectedStampGid = 1;
+        EventBus.emit('editor:select-stamp', { gid: this.selectedStampGid, layer: this.selectedStampLayer });
+      }
+      // 'select' tool is handled purely in the React panel
+      this.updateLayerText();
+    });
+
+    // Legacy tile selection (PATCH 10)
+    this.bindEventBus("editor:select-legacy-tile", (data: { tileIndex: number; layer: 'floor'|'walls' }) => {
+      this.selectedTile = data.tileIndex;
+      this.selectedLayer = data.layer === 'walls' ? 1 : 0;
+      this.updateLayerText();
     });
 
     // Teleport to another player's position (local tab players)
@@ -1374,6 +1427,30 @@ export class GameScene extends Phaser.Scene {
       if (this.gridOverlay) {
         if (data.visible) this.drawGrid();
         else this.gridOverlay.clear();
+      }
+    });
+
+    // Keyboard shortcuts for editor mode (PATCH 8)
+    document.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (!this.editorMode) return;
+      const activeEl = document.activeElement as HTMLElement | null;
+      if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.tagName === "SELECT" || activeEl.isContentEditable)) return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (ctrl) {
+        if (e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); this.editorRedo(); return; }
+        switch (e.key.toLowerCase()) {
+          case "z": e.preventDefault(); this.editorUndo(); break;
+          case "y": e.preventDefault(); this.editorRedo(); break;
+          case "s": e.preventDefault(); this.saveMap(); break;
+        }
+        return;
+      }
+      switch (e.key.toLowerCase()) {
+        case "b": EventBus.emit("editor:select-stamp", { gid: this.selectedStampGid, layer: this.selectedStampLayer }); break;
+        case "e": EventBus.emit("editor:select-stamp", { gid: -1, layer: this.selectedStampLayer }); break;
+        case "g": EventBus.emit("editor:toggle-grid", { visible: !(this.gridOverlay?.visible ?? true) }); break;
+        case "+": case "=": EventBus.emit("editor:set-zoom", { zoom: Math.min(4, this.cameras.main.zoom + 0.25) }); break;
+        case "-": EventBus.emit("editor:set-zoom", { zoom: Math.max(0.5, this.cameras.main.zoom - 0.25) }); break;
       }
     });
 
@@ -1521,14 +1598,14 @@ export class GameScene extends Phaser.Scene {
         const tileX = Math.floor(worldPoint.x / TILE_SIZE);
         const tileY = Math.floor(worldPoint.y / TILE_SIZE);
         this.editorCursor.clear();
-        if (tileX >= 0 && tileX < MAP_COLS && tileY >= 0 && tileY < MAP_ROWS) {
+        if (tileX >= 0 && tileX < this.effectiveMapCols && tileY >= 0 && tileY < this.effectiveMapRows) {
           this.editorCursor.lineStyle(2, 0x00ff00, 0.8);
           this.editorCursor.strokeRect(tileX * TILE_SIZE, tileY * TILE_SIZE, TILE_SIZE, TILE_SIZE);
         }
 
         // Object mode hover preview
         if (this.editorObjectMode) {
-          if (tileX >= 0 && tileX < MAP_COLS && tileY >= 0 && tileY < MAP_ROWS) {
+          if (tileX >= 0 && tileX < this.effectiveMapCols && tileY >= 0 && tileY < this.effectiveMapRows) {
             const def = OBJECT_TYPES[this.selectedObjectType];
             if (def) {
               const dirKey = `obj-${this.selectedObjectType}-${this.selectedObjectDirection}`;
@@ -1601,6 +1678,17 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
+    // Pointerup: finalize tile paint batch for undo tracking
+    this.input.on("pointerup", () => {
+      if (this.editorIsPainting && this.editorPaintBatch.length > 0) {
+        if (this.editorUndoStack.length >= 100) this.editorUndoStack.shift();
+        this.editorUndoStack.push([...this.editorPaintBatch]);
+        this.editorRedoStack = [];
+      }
+      this.editorIsPainting = false;
+      this.editorPaintBatch = [];
+    });
+
     // Mouse click handler
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       // Placement mode: place NPC on clicked tile
@@ -1627,6 +1715,9 @@ export class GameScene extends Phaser.Scene {
 
       // Editor mode: place/erase tiles or objects
       if (this.editorMode) {
+        // Start a new paint batch for undo tracking
+        this.editorPaintBatch = [];
+        this.editorIsPainting = true;
         if (this.editorObjectMode) {
           const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
           const tileX = Math.floor(worldPoint.x / TILE_SIZE);
@@ -2097,7 +2188,8 @@ export class GameScene extends Phaser.Scene {
         const extraLayer = map.createLayer(name, map.tilesets);
         if (extraLayer) {
           if (nameLower === "collision") {
-            extraLayer.setAlpha(0.7);
+            this.collisionLayerRef = extraLayer;
+            extraLayer.setAlpha(0); // hidden by default — shown in editor mode
             extraLayer.setDepth(9999);
           } else {
             extraLayer.setDepth(layerDepth);
@@ -2172,7 +2264,8 @@ export class GameScene extends Phaser.Scene {
         // Show collision tile layer with transparency
         const collisionTileLayer = map.getLayer(layer.name as string);
         if (collisionTileLayer?.tilemapLayer) {
-          collisionTileLayer.tilemapLayer.setAlpha(0.7);
+          this.collisionLayerRef = collisionTileLayer.tilemapLayer;
+          collisionTileLayer.tilemapLayer.setAlpha(0); // hidden by default — shown in editor mode
           collisionTileLayer.tilemapLayer.setDepth(9999);
         }
         continue;
@@ -2305,9 +2398,10 @@ export class GameScene extends Phaser.Scene {
           active: true,
           tilesets: this.tiledJsonData.tilesets ?? [],
           tiledMode: true,
+          layers: this.buildLayersList(),
         });
       } else {
-        EventBus.emit("editor:state", { active: true, tilesets: null, tiledMode: false });
+        EventBus.emit("editor:state", { active: true, tilesets: null, tiledMode: false, layers: this.buildLayersList() });
       }
     } else {
       this.hideEditor();
@@ -2343,12 +2437,6 @@ export class GameScene extends Phaser.Scene {
     }
     this.editorToolbar.setVisible(true);
 
-    // In Tiled mode, always use object editor (tile editor is disabled)
-    if (this.tiledMode) {
-      this.editorObjectMode = true;
-      this.updateObjectToolbarHighlight(); // refresh highlight on re-open
-    }
-
     // Layer indicator — positioned to the right of the React sidebar (≥ 264px from left)
     if (!this.editorLayerText) {
       this.editorLayerText = this.add.text(272, 10, "", {
@@ -2365,6 +2453,8 @@ export class GameScene extends Phaser.Scene {
     this.updateLayerText();
     this.editorLayerText.setVisible(true);
     // Save button is now in the React sidebar — no Phaser save button needed
+    // Show collision layer in editor mode
+    if (this.collisionLayerRef) this.collisionLayerRef.setAlpha(0.5);
   }
 
   private hideEditor(): void {
@@ -2389,6 +2479,8 @@ export class GameScene extends Phaser.Scene {
     // Restore camera zoom to default when exiting editor
     this.cameras.main.setZoom(MAIN_CAMERA_ZOOM);
     this.applyMainCameraBounds(this.currentMapPixelWidth, this.currentMapPixelHeight);
+    // Hide collision layer when leaving editor mode
+    if (this.collisionLayerRef) this.collisionLayerRef.setAlpha(0);
   }
 
   private drawGrid(): void {
@@ -2642,8 +2734,20 @@ export class GameScene extends Phaser.Scene {
       const targetGid = erasing ? 0 : this.selectedStampGid;
       if (!erasing && targetGid === 0) return; // no stamp selected and not erasing
 
-      const layer = this.selectedStampLayer === "walls" ? this.wallsLayer : this.floorLayer;
+      const layer = this.selectedStampLayer === "walls" ? this.wallsLayer
+        : this.selectedStampLayer === "foreground" ? null  // foreground is sprite-based, skip tile paint
+        : this.floorLayer;
+      if (this.selectedStampLayer === "foreground") {
+        // Foreground tiles are individual sprites — cannot paint directly
+        // Show a toast explaining this
+        EventBus.emit("toast:show", { message: "Foreground 레이어는 맵 에디터에서 편집하세요" });
+        return;
+      }
       if (!layer) return;
+
+      // Track undo: record old GID before painting
+      const oldTile = layer.getTileAt(tileX, tileY);
+      const oldGid = oldTile ? oldTile.index : 0;
 
       // Place or erase tile on the Phaser layer
       if (targetGid === 0) {
@@ -2651,6 +2755,9 @@ export class GameScene extends Phaser.Scene {
       } else {
         layer.putTileAt(targetGid, tileX, tileY);
       }
+
+      // Record for undo batch
+      this.editorPaintBatch.push({ layer: this.selectedStampLayer as 'floor'|'walls', tileX, tileY, oldGid, newGid: targetGid });
 
       // Update our live tiledJsonData layer array for saving
       if (this.tiledJsonData) {
@@ -2667,6 +2774,31 @@ export class GameScene extends Phaser.Scene {
           }
         }
       }
+
+      // If stampRegion exists, paint all tiles in the region
+      if (!erasing && this.stampRegion && this.stampRegion.gids) {
+        for (let ry = 0; ry < this.stampRegion.height; ry++) {
+          for (let rx = 0; rx < this.stampRegion.width; rx++) {
+            const tx = tileX + rx;
+            const ty = tileY + ry;
+            if (tx < 0 || tx >= this.effectiveMapCols || ty < 0 || ty >= this.effectiveMapRows) continue;
+            const gid = this.stampRegion.gids[ry]?.[rx] ?? 0;
+            if (gid === 0) continue;
+            const oldRegionTile = layer.getTileAt(tx, ty);
+            const oldRegionGid = oldRegionTile ? oldRegionTile.index : 0;
+            layer.putTileAt(gid, tx, ty);
+            this.editorPaintBatch.push({ layer: this.selectedStampLayer as 'floor'|'walls', tileX: tx, tileY: ty, oldGid: oldRegionGid, newGid: gid });
+            // Update tiledJsonData
+            if (this.tiledJsonData) {
+              const rLayerName = this.selectedStampLayer === 'walls' ? 'Walls' : 'Floor';
+              const rLayers = this.tiledJsonData.layers as Array<Record<string, unknown>>;
+              const rLd = rLayers?.find(l => typeof l.name === 'string' && l.name.toLowerCase() === rLayerName.toLowerCase() && l.type === 'tilelayer');
+              if (rLd) { const arr = rLd.data as number[]; const w = (this.tiledJsonData.width as number) || this.effectiveMapCols; if (arr && ty * w + tx < arr.length) arr[ty * w + tx] = gid; }
+            }
+          }
+        }
+      }
+
       return;
     }
 
@@ -3436,6 +3568,69 @@ export class GameScene extends Phaser.Scene {
     this.pathLastDist = Infinity;
     this.targetNpcId = npc.id;
     this.drawPathLine(path);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Editor undo/redo
+  // ---------------------------------------------------------------------------
+
+  private buildLayersList(): Array<{ name: string; visible: boolean; isActive: boolean }> {
+    if (!this.tiledJsonData) {
+      return [
+        { name: "Floor", visible: this.floorLayer?.visible ?? true, isActive: this.selectedStampLayer === "floor" },
+        { name: "Walls", visible: this.wallsLayer?.visible ?? true, isActive: this.selectedStampLayer === "walls" },
+      ];
+    }
+    const tiledLayers = (this.tiledJsonData.layers as Array<Record<string, unknown>>) || [];
+    return tiledLayers
+      .filter(l => l.type === "tilelayer" || l.type === "objectgroup")
+      .map(l => ({
+        name: l.name as string,
+        visible: (l.visible as boolean) ?? true,
+        isActive: (l.name as string).toLowerCase() === this.selectedStampLayer,
+      }));
+  }
+
+  private editorUndo(): void {
+    const batch = this.editorUndoStack.pop();
+    if (!batch) return;
+    this.editorRedoStack.push(batch);
+    for (const op of [...batch].reverse()) {
+      const layer = op.layer === 'walls' ? this.wallsLayer : this.floorLayer;
+      if (layer) {
+        if (op.oldGid === 0) layer.removeTileAt(op.tileX, op.tileY);
+        else layer.putTileAt(op.oldGid, op.tileX, op.tileY);
+      }
+      const data = op.layer === 'walls' ? this.wallsData : this.floorData;
+      if (data[op.tileY]) data[op.tileY][op.tileX] = op.oldGid;
+      if (this.tiledJsonData) {
+        const layers = this.tiledJsonData.layers as Array<Record<string, unknown>>;
+        const ld = layers?.find(l => typeof l.name === 'string' && l.name.toLowerCase() === op.layer && l.type === 'tilelayer');
+        if (ld) { const arr = ld.data as number[]; const w = (this.tiledJsonData.width as number) || this.effectiveMapCols; if (arr) arr[op.tileY * w + op.tileX] = op.oldGid; }
+      }
+    }
+    EventBus.emit('toast:show', { message: '실행 취소' });
+  }
+
+  private editorRedo(): void {
+    const batch = this.editorRedoStack.pop();
+    if (!batch) return;
+    this.editorUndoStack.push(batch);
+    for (const op of batch) {
+      const layer = op.layer === 'walls' ? this.wallsLayer : this.floorLayer;
+      if (layer) {
+        if (op.newGid === 0) layer.removeTileAt(op.tileX, op.tileY);
+        else layer.putTileAt(op.newGid, op.tileX, op.tileY);
+      }
+      const data = op.layer === 'walls' ? this.wallsData : this.floorData;
+      if (data[op.tileY]) data[op.tileY][op.tileX] = op.newGid;
+      if (this.tiledJsonData) {
+        const layers = this.tiledJsonData.layers as Array<Record<string, unknown>>;
+        const ld = layers?.find(l => typeof l.name === 'string' && l.name.toLowerCase() === op.layer && l.type === 'tilelayer');
+        if (ld) { const arr = ld.data as number[]; const w = (this.tiledJsonData.width as number) || this.effectiveMapCols; if (arr) arr[op.tileY * w + op.tileX] = op.newGid; }
+      }
+    }
+    EventBus.emit('toast:show', { message: '다시 실행' });
   }
 
   // ---------------------------------------------------------------------------

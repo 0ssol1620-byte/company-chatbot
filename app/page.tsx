@@ -15,7 +15,7 @@ import { EventBus, setPendingChannelData, type PendingChannelData } from "@/game
 import ChatPanel, { type ChannelChatMessage } from "@/components/ChatPanel";
 import MeetingRoom from "@/components/MeetingRoom";
 import NpcHireModal from "@/components/NpcHireModal";
-import MapEditorPanel, { type TilesetDef } from "@/components/MapEditorPanel";
+import MapEditorPanel, { type TilesetDef, type LayerInfo } from "@/components/MapEditorPanel";
 import PlayerDirectoryModal from "@/components/PlayerDirectoryModal";
 import type { NpcChatMessage } from "@/components/NpcDialog";
 import TaskBoard from "@/components/TaskBoard";
@@ -289,6 +289,7 @@ function GamePageInner() {
   const [editorModeActive, setEditorModeActive] = useState(false);
   const [editorTilesets, setEditorTilesets] = useState<TilesetDef[] | null>(null);
   const [editorTiledMode, setEditorTiledMode] = useState(false);
+  const [editorLayers, setEditorLayers] = useState<LayerInfo[]>([]);
 
   // Supabase connection state (H4)
   const [supabaseStatus, setSupabaseStatus] = useState<"connecting" | "connected" | "error">("connecting");
@@ -1985,10 +1986,11 @@ function GamePageInner() {
 
   // Listen for editor state changes (tileset info for tile picker panel)
   useEffect(() => {
-    const onEditorState = (state: { active: boolean; tilesets: TilesetDef[] | null; tiledMode: boolean }) => {
+    const onEditorState = (state: { active: boolean; tilesets: TilesetDef[] | null; tiledMode: boolean; layers?: LayerInfo[] }) => {
       setEditorModeActive(state.active);
       setEditorTilesets(state.tilesets);
       setEditorTiledMode(state.tiledMode);
+      if (state.layers) setEditorLayers(state.layers);
     };
     EventBus.on("editor:state", onEditorState);
     return () => { EventBus.off("editor:state", onEditorState); };
@@ -2075,6 +2077,7 @@ function GamePageInner() {
         <MapEditorPanel
           tilesets={editorTilesets as TilesetDef[] | null}
           tiledMode={editorTiledMode}
+          layers={editorLayers}
           onSave={() => EventBus.emit("editor:save-map")}
         />
       )}
